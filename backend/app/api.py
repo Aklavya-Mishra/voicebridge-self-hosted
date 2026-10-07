@@ -41,6 +41,12 @@ def login(body: LoginRequest, request: Request) -> dict:
     return {"token": token, "user": user}
 
 
+@router.get("/sessions")
+def list_sessions(request: Request, user: dict = Depends(current_user)) -> dict:
+    """The signed-in user's saved calls, newest first."""
+    return {"sessions": request.app.state.store.list_for(user["id"])}
+
+
 @router.post("/sessions")
 def create_session(request: Request, user: dict = Depends(current_user)) -> dict:
     return {"session": request.app.state.store.create(user).to_dict()}

@@ -10,3 +10,4 @@ agent/build/
 agent/dist/
 agent/*.spec
 frontend/public/downloads/
+backend/data/

@@ -41,6 +41,16 @@ export interface SttStatusEvent {
   reason: string
 }
 
+/** A saved call in the "Past calls" list. */
+export interface SessionSummary {
+  code: string
+  kind: 'live' | 'import'
+  created_at: number
+  participants: User[]
+  lines: number
+  preview: string
+}
+
 export interface ChatMessage {
   id: string
   speakerId: string

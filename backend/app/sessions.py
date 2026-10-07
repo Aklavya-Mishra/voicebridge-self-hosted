@@ -1,12 +1,17 @@
-"""In-memory call sessions: invite codes, participants and the ordered transcript.
+"""Call sessions: invite codes, participants and the ordered transcript.
 
-Single-process only. A Redis-backed store with the same interface is the path to scale out.
+Kept in memory and, with a db_path, saved to SQLite as they change (every finished sentence), so calls
+survive a backend restart. Single-process only; a shared store with the same interface is the path to
+scale out.
 """
 import bisect
+import json
 import secrets
+import sqlite3
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I to avoid misreads
 CODE_LENGTH = 6
@@ -67,10 +72,63 @@ def normalize_code(code: str | None) -> str:
     return (code or "").strip().upper()
 
 
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+    code TEXT PRIMARY KEY, id TEXT NOT NULL, kind TEXT NOT NULL, created_by TEXT NOT NULL,
+    created_at REAL NOT NULL, participants TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS utterances (
+    id TEXT PRIMARY KEY, code TEXT NOT NULL REFERENCES sessions(code), speaker_id TEXT NOT NULL,
+    speaker_name TEXT NOT NULL, text TEXT NOT NULL, start_ts REAL NOT NULL, end_ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS utterances_by_code ON utterances(code, start_ts);
+"""
+
+
+class _Db:
+    def __init__(self, path: str):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        # Autocommit: each write is saved immediately. Writes come from the server's event loop thread.
+        self._conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+        self._conn.executescript(_SCHEMA)
+
+    def save_session(self, s: "Session") -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?, ?, ?)",
+            (s.code, s.id, s.kind, s.created_by, s.created_at, json.dumps(s.participants)),
+        )
+
+    def save_utterance(self, code: str, u: Utterance) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO utterances VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (u.id, code, u.speaker_id, u.speaker_name, u.text, u.start_ts, u.end_ts),
+        )
+
+    def load(self) -> list["Session"]:
+        sessions = {
+            code: Session(id=sid, code=code, kind=kind, created_by=by, created_at=at, participants=json.loads(people))
+            for code, sid, kind, by, at, people in self._conn.execute("SELECT * FROM sessions")
+        }
+        rows = self._conn.execute(
+            "SELECT id, code, speaker_id, speaker_name, text, start_ts, end_ts FROM utterances ORDER BY start_ts"
+        )
+        for uid, code, speaker_id, speaker_name, text, start, end in rows:
+            if code in sessions:
+                sessions[code].transcript.append(Utterance(uid, speaker_id, speaker_name, text, start, end))
+        return list(sessions.values())
+
+
 class SessionStore:
-    def __init__(self, max_participants: int = 2):
+    def __init__(self, max_participants: int = 2, db_path: str | None = None):
         self._max_participants = max_participants
         self._sessions: dict[str, Session] = {}
+        self._db = _Db(db_path) if db_path else None
+        if self._db:
+            self._sessions = {s.code: s for s in self._db.load()}
+
+    def _save(self, session: Session) -> None:
+        if self._db:
+            self._db.save_session(session)
 
     def _new_code(self) -> str:
         while True:
@@ -88,6 +146,7 @@ class SessionStore:
             participants={user["id"]: user["name"]},
         )
         self._sessions[session.code] = session
+        self._save(session)
         return session
 
     def get(self, code: str | None) -> Session:
@@ -105,6 +164,7 @@ class SessionStore:
         if len(session.participants) >= self._max_participants:
             raise SessionFull("Session already has the maximum number of participants")
         session.participants[user["id"]] = user["name"]
+        self._save(session)
         return session
 
     def require_participant(self, code: str | None, user: dict) -> Session:
@@ -114,7 +174,31 @@ class SessionStore:
         return session
 
     def add_guest(self, code: str, guest_id: str, name: str) -> None:
-        self.get(code).participants[guest_id] = name
+        session = self.get(code)
+        session.participants[guest_id] = name
+        self._save(session)
 
     def add_utterance(self, code: str, utterance: Utterance) -> None:
-        bisect.insort(self.get(code).transcript, utterance, key=lambda u: u.start_ts)
+        session = self.get(code)
+        bisect.insort(session.transcript, utterance, key=lambda u: u.start_ts)
+        if self._db:
+            self._db.save_utterance(session.code, utterance)
+
+    def list_for(self, user_id: str) -> list[dict]:
+        """The user's calls, newest first, with a one-line preview."""
+        mine = sorted(
+            (s for s in self._sessions.values() if user_id in s.participants),
+            key=lambda s: s.created_at,
+            reverse=True,
+        )
+        return [
+            {
+                "code": s.code,
+                "kind": s.kind,
+                "created_at": s.created_at,
+                "participants": [{"id": uid, "name": name} for uid, name in s.participants.items()],
+                "lines": len(s.transcript),
+                "preview": s.transcript[0].text if s.transcript else "",
+            }
+            for s in mine
+        ]

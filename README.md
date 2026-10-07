@@ -53,6 +53,9 @@ npm run dev                     # http://localhost:5173
 
    Your lines carry your sign-in name; everything from the other side is `Computer`.
 5. **Leave** asks for confirmation; it also stops the agent's recording for that call.
+6. Every call is saved as it happens (each finished sentence) in `backend/data/voicebridge.db` (SQLite;
+   `DB_PATH` changes the location). **Past calls** on the home page lists them, newest first; open one to
+   read it or download its transcript.
 
 ### Desktop agent (Windows)
 
@@ -131,8 +134,9 @@ cd agent && .venv/Scripts/python -m pytest
 
 ## v1 limits
 
-- One backend process with in-memory sessions: transcripts are lost when the backend restarts (download
-  them with **Transcript**).
+- One backend process; calls are saved to a local SQLite file, not shared between servers.
+- Sign-in is by name only: the same name is the same user (and sees the same past calls). Fine for one
+  person; real accounts are needed before people share a deployment.
 - Two participants per session.
 - The desktop agent is Windows only. It hears all computer audio, so other sounds (videos, notifications)
   are transcribed as the other side; it also keeps transcribing your mic while you are muted in the call

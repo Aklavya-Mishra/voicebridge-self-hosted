@@ -1,4 +1,4 @@
-import type { Session, User } from './types'
+import type { Session, SessionSummary, User } from './types'
 
 // Empty base means same origin (the Vite dev server proxies /api and /socket.io).
 export const API_BASE: string = import.meta.env.VITE_API_URL ?? ''
@@ -29,6 +29,8 @@ export const login = (name: string) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
+
+export const listSessions = (token: string) => request<{ sessions: SessionSummary[] }>('/api/sessions', {}, token)
 
 export const createSession = (token: string) =>
   request<{ session: Session }>('/api/sessions', { method: 'POST' }, token)

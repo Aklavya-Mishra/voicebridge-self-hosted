@@ -183,6 +183,35 @@ main {
   align-items: center;
   gap: 0.5rem;
 }
+.past-calls {
+  grid-column: 1 / -1;
+}
+.past-calls ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+.past-call {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(9rem, auto) 1fr auto;
+  gap: 0.75rem;
+  align-items: center;
+  text-align: left;
+}
+.past-call-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .past-call {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+  }
+}
 .agent-ok {
   color: var(--accent);
   font-weight: 600;

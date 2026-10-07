@@ -19,6 +19,7 @@ class Settings:
     jwt_ttl_seconds: int = 12 * 60 * 60
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     max_participants: int = 2
+    db_path: str | None = None  # SQLite file for saved calls; None keeps everything in memory
 
     sample_rate: int = 16000
     vad_provider: str = "energy"  # energy | silero
@@ -67,6 +68,7 @@ class Settings:
                 o.strip() for o in env("CORS_ORIGINS", ",".join(cls.cors_origins)).split(",") if o.strip()
             ),
             max_participants=int(env("MAX_PARTICIPANTS", cls.max_participants)),
+            db_path=env("DB_PATH", "data/voicebridge.db") or None,
             vad_provider=env("VAD_PROVIDER", cls.vad_provider).lower(),
             vad_energy_threshold_dbfs=float(env("VAD_ENERGY_THRESHOLD_DBFS", cls.vad_energy_threshold_dbfs)),
             end_silence_ms=int(env("END_SILENCE_MS", cls.end_silence_ms)),

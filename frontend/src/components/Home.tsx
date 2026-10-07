@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { AGENT_DOWNLOAD } from '../lib/agent'
 import { createSession } from '../lib/api'
+import { PastCalls } from './PastCalls'
 
 interface Props {
   token: string
@@ -80,6 +81,7 @@ export function Home({ token, agentFound, onOpenCall, onImport }: Props) {
         <p className="muted">Stereo file, one person per channel. You pick which side is you.</p>
         <button onClick={onImport}>Import file</button>
       </section>
+      <PastCalls token={token} onOpen={onOpenCall} />
       {error && <p className="error">{error}</p>}
     </div>
   )

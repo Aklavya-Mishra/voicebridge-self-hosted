@@ -1,6 +1,6 @@
 """JWT issue/verify. v1 login is display-name only; the token carries user id and name."""
+import hashlib
 import time
-import uuid
 
 import jwt
 
@@ -17,11 +17,18 @@ def issue_token(settings: Settings, name: str) -> tuple[str, dict]:
     name = (name or "").strip()
     if not name or len(name) > MAX_NAME_LENGTH:
         raise AuthError(f"Name must be 1-{MAX_NAME_LENGTH} characters")
-    user = {"id": uuid.uuid4().hex, "name": name}
+    # Name-only sign-in: the same name is always the same user, so saved calls stay theirs after the
+    # token expires. Replace with real accounts before more than one person shares a deployment.
+    user = {"id": user_id_for(name), "name": name}
     now = int(time.time())
     claims = {"sub": user["id"], "name": user["name"], "iat": now, "exp": now + settings.jwt_ttl_seconds}
     token = jwt.encode(claims, settings.jwt_secret, algorithm="HS256")
     return token, user
+
+
+def user_id_for(name: str) -> str:
+    canonical = " ".join(name.split()).casefold()
+    return hashlib.sha256(f"voicebridge-user:{canonical}".encode()).hexdigest()[:32]
 
 
 def verify_token(settings: Settings, token: str | None) -> dict:
@@ -33,4 +40,6 @@ def verify_token(settings: Settings, token: str | None) -> dict:
         )
     except jwt.PyJWTError as exc:
         raise AuthError("Invalid token") from exc
-    return {"id": claims["sub"], "name": claims.get("name", "")}
+    name = claims.get("name", "")
+    # Tokens issued before ids were derived from the name carry a random id: map them to the stable one.
+    return {"id": user_id_for(name) if name else claims["sub"], "name": name}

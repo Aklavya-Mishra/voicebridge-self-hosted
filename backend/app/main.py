@@ -19,7 +19,7 @@ def create_app(settings: Settings | None = None, stt: STTProvider | None = None)
     if settings.jwt_secret == DEV_JWT_SECRET:
         logger.warning("JWT_SECRET is the development default; set a real secret outside local dev")
     stt = stt or make_stt(settings)
-    store = SessionStore(max_participants=settings.max_participants)
+    store = SessionStore(max_participants=settings.max_participants, db_path=settings.db_path)
 
     api = FastAPI(title="VoiceBridge", version="0.1.0")
     api.add_middleware(
