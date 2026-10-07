@@ -33,6 +33,13 @@ class NotAParticipant(SessionError):
     status_code = 403
 
 
+class InvalidName(SessionError):
+    status_code = 400
+
+
+MAX_NAME_LENGTH = 40
+
+
 @dataclass
 class Utterance:
     id: str
@@ -155,15 +162,23 @@ class SessionStore:
             raise SessionNotFound("Session not found")
         return session
 
-    def join(self, code: str | None, user: dict) -> Session:
+    def join(self, code: str | None, user: dict, name: str | None = None) -> Session:
+        """Add the user to the session. `name` is their name in this call (recorded on their lines);
+        without one, the name they already have in the session (or their sign-in name) is kept."""
+        name = " ".join((name or "").split())
+        if len(name) > MAX_NAME_LENGTH:
+            raise InvalidName(f"Name must be at most {MAX_NAME_LENGTH} characters")
         session = self.get(code)
         if user["id"] in session.participants:
+            if name and session.participants[user["id"]] != name:
+                session.participants[user["id"]] = name
+                self._save(session)
             return session
         if session.kind != "live":
             raise NotAParticipant("Imported sessions cannot be joined")
         if len(session.participants) >= self._max_participants:
             raise SessionFull("Session already has the maximum number of participants")
-        session.participants[user["id"]] = user["name"]
+        session.participants[user["id"]] = name or user["name"]
         self._save(session)
         return session
 

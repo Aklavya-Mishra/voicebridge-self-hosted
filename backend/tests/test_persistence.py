@@ -21,11 +21,11 @@ def test_sessions_and_transcripts_survive_a_restart(tmp_path):
     session = store.create(ME)
     store.add_utterance(session.code, utt("a", "How can I help you?", 10.0))
     store.add_utterance(session.code, utt("b", "Flight booking please.", 12.0, {"id": "u1-call", "name": "Other person"}))
-    store.join(session.code, {"id": "u2", "name": "Ben"})
+    store.join(session.code, {"id": "u2", "name": "Ben"}, name="Ben K")
 
     reopened = SessionStore(db_path=str(db)).get(session.code)
     assert reopened.created_by == "u1"
-    assert reopened.participants == {"u1": "Aklavya", "u2": "Ben"}
+    assert reopened.participants == {"u1": "Aklavya", "u2": "Ben K"}
     assert [u.text for u in reopened.transcript] == ["How can I help you?", "Flight booking please."]
     assert reopened.transcript[1].speaker_name == "Other person"
 

@@ -10,13 +10,15 @@ interface Props {
   code: string
   token: string
   me: User
+  /** Name entered for this call; recorded on this user's lines. */
+  callName: string
   onLeave: () => void
   onAuthExpired: () => void
 }
 
 type Status = 'connecting' | 'joined' | 'error'
 
-export function CallView({ code, token, me, onLeave, onAuthExpired }: Props) {
+export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: Props) {
   const [status, setStatus] = useState<Status>('connecting')
   const [error, setError] = useState('')
   const [participants, setParticipants] = useState<User[]>([])
@@ -57,7 +59,7 @@ export function CallView({ code, token, me, onLeave, onAuthExpired }: Props) {
     socketRef.current = socket
 
     socket.on('connect', async () => {
-      const ack = await socket.emitWithAck('join_session', { code })
+      const ack = await socket.emitWithAck('join_session', { code, name: callName })
       if (!ack.ok) {
         setStatus('error')
         setError(ack.error)
@@ -94,7 +96,7 @@ export function CallView({ code, token, me, onLeave, onAuthExpired }: Props) {
       socket.disconnect()
       socketRef.current = null
     }
-  }, [code, token, upsert, onAuthExpired])
+  }, [code, callName, token, upsert, onAuthExpired])
 
   const startMic = async () => {
     setConsentOpen(false)
@@ -159,9 +161,10 @@ export function CallView({ code, token, me, onLeave, onAuthExpired }: Props) {
 
   const sorted = useMemo(() => [...messages.values()].sort((a, b) => a.startTs - b.startTs), [messages])
   const other = participants.find((p) => p.id !== me.id)
+  const myName = participants.find((p) => p.id === me.id)?.name ?? callName
 
   const downloadTranscript = () => {
-    const text = formatTranscript(sorted, me.id, me.name)
+    const text = formatTranscript(sorted)
     const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }))
     const a = document.createElement('a')
     a.href = url
@@ -180,9 +183,9 @@ export function CallView({ code, token, me, onLeave, onAuthExpired }: Props) {
           </button>
         </div>
         <div className="people">
-          <span className="person mine">You · {me.name}</span>
+          <span className="person mine">You · {myName}</span>
           <span className={`person theirs ${other || viaAgent ? '' : 'waiting'}`}>
-            {other ? other.name : viaAgent ? 'Other person (computer audio)' : 'Waiting for the other person…'}
+            {other ? other.name : viaAgent ? 'Computer' : 'Waiting for the other person…'}
           </span>
         </div>
         <div className="call-actions">

@@ -104,7 +104,7 @@ def stereo(left: bytes, right: bytes) -> bytes:
 
 
 async def test_stereo_mic_plus_call_audio_splits_speakers_by_channel(server):
-    """One user streams mic (left) + call audio (right): the call side becomes 'Other person'."""
+    """One user streams mic (left) + call audio (right): the call side becomes 'Computer'."""
     token, user = await login(server, "Aklavya")
     async with httpx.AsyncClient(base_url=server) as c:
         code = (await c.post("/api/sessions", headers={"Authorization": f"Bearer {token}"})).json()["session"]["code"]
@@ -126,8 +126,45 @@ async def test_stereo_mic_plus_call_audio_splits_speakers_by_channel(server):
 
     ordered = sorted(finals, key=lambda d: d["start_ts"])
     assert [d["speaker"]["id"] for d in ordered] == [user["id"], f"{user['id']}-call"]
-    assert ordered[1]["speaker"]["name"] == "Other person"
+    assert ordered[1]["speaker"]["name"] == "Computer"
     # Both channels share one clock: the call side starts ~1.5 s after the mic side.
     assert ordered[1]["start_ts"] - ordered[0]["start_ts"] == pytest.approx(1.5, abs=0.4)
     await client.disconnect()
 
+
+
+async def test_name_entered_for_the_call_is_recorded_on_my_lines(server):
+    token, user = await login(server, "Aklavya")
+    async with httpx.AsyncClient(base_url=server) as c:
+        code = (await c.post("/api/sessions", headers={"Authorization": f"Bearer {token}"})).json()["session"]["code"]
+    client, events = await connect(server, token)
+    joined = await client.call("join_session", {"code": code, "name": "  Aklavya M  "})
+    assert {"id": user["id"], "name": "Aklavya M"} in joined["session"]["participants"]
+
+    for chunk in chunks(tone(1.0) + silence(1.0)):
+        await client.emit("audio_chunk", {"code": code, "audio": chunk})
+    await client.emit("stop_audio", {"code": code})
+    for _ in range(50):
+        finals = [d for kind, d in events if kind == "transcript" and d["final"] and d["text"]]
+        if finals:
+            break
+        await asyncio.sleep(0.1)
+    assert finals[0]["speaker"] == {"id": user["id"], "name": "Aklavya M"}
+
+    async with httpx.AsyncClient(base_url=server) as c:
+        saved = (await c.get(f"/api/sessions/{code}", headers={"Authorization": f"Bearer {token}"})).json()["session"]
+    assert saved["transcript"][0]["speaker_name"] == "Aklavya M"
+    await client.disconnect()
+
+
+async def test_joining_without_a_name_keeps_the_one_already_set(server):
+    token, user = await login(server, "Aklavya")
+    async with httpx.AsyncClient(base_url=server) as c:
+        code = (await c.post("/api/sessions", headers={"Authorization": f"Bearer {token}"})).json()["session"]["code"]
+    client, _ = await connect(server, token)
+    await client.call("join_session", {"code": code, "name": "Host"})
+    rejoined = await client.call("join_session", {"code": code})
+    assert {"id": user["id"], "name": "Host"} in rejoined["session"]["participants"]
+    too_long = await client.call("join_session", {"code": code, "name": "x" * 41})
+    assert too_long["ok"] is False
+    await client.disconnect()

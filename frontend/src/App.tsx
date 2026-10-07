@@ -2,12 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { CallView } from './components/CallView'
 import { Home } from './components/Home'
 import { ImportView } from './components/ImportView'
+import { TranscriptView } from './components/TranscriptView'
 import { Login } from './components/Login'
 import { connectAgent } from './lib/agent'
 import { ApiError, fetchMe, health } from './lib/api'
 import { loadAuth, saveAuth, type StoredAuth } from './lib/storage'
 
-type View = { name: 'home' } | { name: 'call'; code: string } | { name: 'import' }
+type View =
+  | { name: 'home' }
+  | { name: 'call'; code: string; callName: string }
+  | { name: 'transcript'; code: string }
+  | { name: 'import' }
 
 export default function App() {
   const [auth, setAuth] = useState<StoredAuth | null>(() => loadAuth())
@@ -89,14 +94,25 @@ export default function App() {
         {!auth ? (
           <Login onLogin={signIn} />
         ) : view.name === 'call' ? (
-          <CallView code={view.code} token={auth.token} me={auth.user} onLeave={goHome} onAuthExpired={signOut} />
+          <CallView
+            code={view.code}
+            callName={view.callName}
+            token={auth.token}
+            me={auth.user}
+            onLeave={goHome}
+            onAuthExpired={signOut}
+          />
+        ) : view.name === 'transcript' ? (
+          <TranscriptView code={view.code} token={auth.token} onBack={goHome} />
         ) : view.name === 'import' ? (
           <ImportView token={auth.token} me={auth.user} onBack={goHome} />
         ) : (
           <Home
             token={auth.token}
             agentFound={agentFound}
-            onOpenCall={(code) => setView({ name: 'call', code })}
+            defaultName={auth.user.name}
+            onOpenCall={(code, callName) => setView({ name: 'call', code, callName })}
+            onOpenTranscript={(code) => setView({ name: 'transcript', code })}
             onImport={() => setView({ name: 'import' })}
           />
         )}

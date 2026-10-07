@@ -15,7 +15,7 @@ from app.stt import STTProvider, clean_transcript
 from app.vad import make_vad
 
 OTHER_SPEAKER_ID = "other"
-OTHER_SPEAKER_NAME = "Other participant"
+OTHER_SPEAKER_NAME = "Computer"
 # Mean absolute sample difference below this means both channels carry the same (mono) audio.
 IDENTICAL_CHANNEL_THRESHOLD = 8.0
 

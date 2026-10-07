@@ -24,6 +24,25 @@ export function loadAuth(): StoredAuth | null {
   }
 }
 
+const CALL_NAME_KEY = 'voicebridge.callName'
+
+/** The name last entered for a call, to pre-fill the next one. */
+export function loadCallName(): string {
+  try {
+    return localStorage.getItem(CALL_NAME_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function saveCallName(name: string): void {
+  try {
+    localStorage.setItem(CALL_NAME_KEY, name)
+  } catch {
+    // ignore
+  }
+}
+
 export function saveAuth(auth: StoredAuth | null): void {
   try {
     if (auth) localStorage.setItem(KEY, JSON.stringify(auth))

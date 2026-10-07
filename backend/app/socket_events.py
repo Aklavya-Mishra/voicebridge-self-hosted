@@ -1,6 +1,6 @@
 """Socket.IO events for live sessions.
 
-Client -> server: join_session {code}, audio_chunk {code, audio, channels?}, stop_audio {code}, leave_session {code}
+Client -> server: join_session {code, name?}, audio_chunk {code, audio, channels?}, stop_audio {code}, leave_session {code}
   audio is PCM16 at the configured sample rate. channels=2 means interleaved stereo from one endpoint:
   left = the user's mic, right = the call audio (the remote person, who does not run VoiceBridge).
   Each channel gets its own STT stream; the channel decides the speaker.
@@ -35,7 +35,7 @@ logger = logging.getLogger("voicebridge")
 LiveStream = ParticipantStream | StreamingParticipantStream | DeepgramParticipantStream
 
 # Speaker for the call-audio (right) channel of a stereo endpoint.
-CALL_SPEAKER_NAME = "Other person"
+CALL_SPEAKER_NAME = "Computer"
 
 # How long the agent has to confirm start_recording.
 AGENT_ACK_TIMEOUT_S = 5.0
@@ -141,7 +141,7 @@ class SocketHandlers:
     async def join_session(self, sid: str, data: dict) -> dict:
         state = await self._sio.get_session(sid)
         try:
-            session = self._store.join((data or {}).get("code"), state["user"])
+            session = self._store.join((data or {}).get("code"), state["user"], (data or {}).get("name"))
         except SessionError as exc:
             return {"ok": False, "error": str(exc)}
         state["codes"].add(session.code)
@@ -160,7 +160,7 @@ class SocketHandlers:
             return
         if len(audio) > self._settings.max_chunk_bytes:
             return
-        user = state["user"]
+        user = self._speaker(code, state["user"])
         key = (code, user["id"])
         if channels == 1:
             await self._stream_for(code, user).push(bytes(audio), self._chunk_ts(key, len(audio)))
@@ -184,6 +184,11 @@ class SocketHandlers:
         code = normalize_code((data or {}).get("code"))
         if code in state["codes"]:
             await self._leave(sid, state, code)
+
+    def _speaker(self, code: str, user: dict) -> dict:
+        """The user as recorded in this call: the name they entered when joining it."""
+        participants = self._store.get(code).participants
+        return {"id": user["id"], "name": participants.get(user["id"], user["name"])}
 
     def _stream_for(self, code: str, speaker: dict) -> LiveStream:
         return self._streams.get((code, speaker["id"])) or self._new_stream(code, speaker)

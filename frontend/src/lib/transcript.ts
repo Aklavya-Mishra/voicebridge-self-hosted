@@ -1,11 +1,11 @@
 import { toTurns } from './turns.ts' // extension: also loaded by `node --test`
 import type { ChatMessage } from './types'
 
-/** Label for everyone who is not me: the call side captured from the computer's audio. */
-export const OTHER_LABEL = 'Computer'
-
-/** The call as plain text, one line per bubble: "Aklavya: ..." / "Computer: ...". */
-export const formatTranscript = (messages: ChatMessage[], myId: string, myName: string): string =>
+/**
+ * The call as plain text, one line per bubble, labelled with the name each speaker was recorded with:
+ * the name they entered for the call, or "Computer" for audio captured from the computer.
+ */
+export const formatTranscript = (messages: ChatMessage[]): string =>
   toTurns(messages)
-    .map((turn) => `${turn.speakerId === myId ? myName : OTHER_LABEL}: ${turn.parts.map((m) => m.text).join(' ')}\n`)
+    .map((turn) => `${turn.speakerName}: ${turn.parts.map((m) => m.text).join(' ')}\n`)
     .join('')
