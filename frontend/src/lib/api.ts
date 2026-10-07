@@ -32,6 +32,8 @@ export const login = (name: string) =>
 
 export const listSessions = (token: string) => request<{ sessions: SessionSummary[] }>('/api/sessions', {}, token)
 
+export const fetchMe = (token: string) => request<{ user: User }>('/api/auth/me', {}, token)
+
 export const createSession = (token: string) =>
   request<{ session: Session }>('/api/sessions', { method: 'POST' }, token)
 

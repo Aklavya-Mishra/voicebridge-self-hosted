@@ -4,7 +4,7 @@ import { Home } from './components/Home'
 import { ImportView } from './components/ImportView'
 import { Login } from './components/Login'
 import { connectAgent } from './lib/agent'
-import { health } from './lib/api'
+import { ApiError, fetchMe, health } from './lib/api'
 import { loadAuth, saveAuth, type StoredAuth } from './lib/storage'
 
 type View = { name: 'home' } | { name: 'call'; code: string } | { name: 'import' }
@@ -48,6 +48,24 @@ export default function App() {
     setView({ name: 'home' })
   }, [])
   const goHome = useCallback(() => setView({ name: 'home' }), [])
+
+  // The server decides who a token belongs to; correct the saved identity if it differs (e.g. a sign-in
+  // saved before user ids were derived from the name), or "mine" vs "theirs" in the chat would be wrong.
+  useEffect(() => {
+    if (!token) return
+    fetchMe(token)
+      .then(({ user }) =>
+        setAuth((prev) => {
+          if (!prev || prev.token !== token || (prev.user.id === user.id && prev.user.name === user.name)) return prev
+          const next = { token, user }
+          saveAuth(next)
+          return next
+        }),
+      )
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) signOut()
+      })
+  }, [token, signOut])
 
   return (
     <div className="app">

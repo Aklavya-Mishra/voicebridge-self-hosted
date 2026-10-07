@@ -41,6 +41,12 @@ def login(body: LoginRequest, request: Request) -> dict:
     return {"token": token, "user": user}
 
 
+@router.get("/auth/me")
+def me(user: dict = Depends(current_user)) -> dict:
+    """Who the server thinks the token belongs to; the web app keeps its saved identity in sync with it."""
+    return {"user": user}
+
+
 @router.get("/sessions")
 def list_sessions(request: Request, user: dict = Depends(current_user)) -> dict:
     """The signed-in user's saved calls, newest first."""

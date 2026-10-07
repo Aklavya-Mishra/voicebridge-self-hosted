@@ -92,3 +92,16 @@ def test_older_tokens_map_to_the_stable_id_for_their_name():
     settings = Settings(jwt_secret="s")
     old = jwt.encode({"sub": "random-old-id", "name": "Aklavya", "exp": int(time.time()) + 60}, "s", algorithm="HS256")
     assert verify_token(settings, old) == {"id": user_id_for("Aklavya"), "name": "Aklavya"}
+
+
+async def test_me_returns_the_server_side_identity(client):
+    import time
+
+    import jwt
+
+    from app.auth import user_id_for
+
+    old = jwt.encode({"sub": "random-old-id", "name": "Aklavya", "exp": int(time.time()) + 60}, "test-secret", algorithm="HS256")
+    r = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {old}"})
+    assert r.json() == {"user": {"id": user_id_for("Aklavya"), "name": "Aklavya"}}
+    assert (await client.get("/api/auth/me")).status_code == 401
