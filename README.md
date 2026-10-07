@@ -39,7 +39,9 @@ npm run dev                     # http://localhost:5173
 ## Using it
 
 1. Open http://localhost:5173 and sign in with your name (the top-right pill shows the STT engine).
-2. **Start session**, then **Start mic**:
+2. **Start session** (or **Join** with a code) and enter **Your name in this call**: it is recorded on your
+   lines. The other person is recorded under the name they enter if they use VoiceBridge, or as
+   **Computer** if their voice comes from your computer's audio. Then **Start mic**:
    - desktop agent running: **Start** captures your mic and the computer's audio (the call);
    - no agent: **Mic only** transcribes just your side (the dialog says the agent is not running).
 3. The chat shows your speech on the left and the other side on the right. Consecutive sentences from one
@@ -51,11 +53,11 @@ npm run dev                     # http://localhost:5173
    Computer: I was wondering if I can get help in flight booking.
    ```
 
-   Your lines carry your sign-in name; everything from the other side is `Computer`.
+   Each line carries the name its speaker was recorded with.
 5. **Leave** asks for confirmation; it also stops the agent's recording for that call.
 6. Every call is saved as it happens (each finished sentence) in `backend/data/voicebridge.db` (SQLite;
-   `DB_PATH` changes the location). **Past calls** on the home page lists them, newest first; open one to
-   read it or download its transcript.
+   `DB_PATH` changes the location). **Past calls** on the home page lists them, newest first; opening one
+   shows its transcript (`Name: text` lines) with a Back button.
 
 ### Desktop agent (Windows)
 
@@ -135,7 +137,8 @@ cd agent && .venv/Scripts/python -m pytest
 ## v1 limits
 
 - One backend process; calls are saved to a local SQLite file, not shared between servers.
-- Sign-in is by name only: the same name is the same user (and sees the same past calls). Fine for one
+- Sign-in is by name only: the same sign-in name is the same user (and sees the same past calls); the name
+  shown in a transcript is the one entered for that call. Fine for one
   person; real accounts are needed before people share a deployment.
 - Two participants per session.
 - The desktop agent is Windows only. It hears all computer audio, so other sounds (videos, notifications)
