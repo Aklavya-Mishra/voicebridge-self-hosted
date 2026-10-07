@@ -1,9 +1,11 @@
 """REST endpoints: login, sessions, pre-recorded import."""
+import asyncio
 import time
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from app.analysis import analyse_session, mask_text
 from app.auth import AuthError, issue_token, verify_token
 from app.importer import OTHER_SPEAKER_ID, OTHER_SPEAKER_NAME, ImportRejected, transcribe_stereo
 from app.sessions import SessionError
@@ -88,5 +90,9 @@ async def import_recording(
     session = store.create(user, kind="import")
     store.add_guest(session.code, OTHER_SPEAKER_ID, OTHER_SPEAKER_NAME)
     for utterance in utterances:
+        if settings.pii_masking:
+            utterance.text = mask_text(utterance.text)
         store.add_utterance(session.code, utterance)
+    if settings.call_analysis:
+        asyncio.create_task(analyse_session(store, session.code, request.app.state.llm))
     return {"session": session.to_dict()}

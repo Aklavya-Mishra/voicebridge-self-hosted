@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import router
 from app.config import DEV_JWT_SECRET, Settings
+from app.llm import LlmChain, make_llm_chain
 from app.sessions import SessionStore
 from app.socket_events import SocketHandlers
 from app.stt import STTProvider, make_stt
@@ -14,11 +15,16 @@ from app.stt import STTProvider, make_stt
 logger = logging.getLogger("voicebridge")
 
 
-def create_app(settings: Settings | None = None, stt: STTProvider | None = None) -> socketio.ASGIApp:
+def create_app(
+    settings: Settings | None = None, stt: STTProvider | None = None, llm: LlmChain | None = None
+) -> socketio.ASGIApp:
     settings = settings or Settings.from_env()
     if settings.jwt_secret == DEV_JWT_SECRET:
         logger.warning("JWT_SECRET is the development default; set a real secret outside local dev")
     stt = stt or make_stt(settings)
+    llm = llm or make_llm_chain(settings)
+    if settings.call_analysis:
+        logger.info("Call analysis with: %s", " > ".join(llm.names))
     store = SessionStore(max_participants=settings.max_participants, db_path=settings.db_path)
 
     api = FastAPI(title="VoiceBridge", version="0.1.0")
@@ -32,6 +38,7 @@ def create_app(settings: Settings | None = None, stt: STTProvider | None = None)
     api.state.settings = settings
     api.state.stt = stt
     api.state.store = store
+    api.state.llm = llm
     api.include_router(router)
 
     sio = socketio.AsyncServer(
@@ -39,5 +46,5 @@ def create_app(settings: Settings | None = None, stt: STTProvider | None = None)
         cors_allowed_origins=list(settings.cors_origins),
         max_http_buffer_size=settings.max_chunk_bytes * 4,
     )
-    SocketHandlers(sio, store, settings, stt)
+    SocketHandlers(sio, store, settings, stt, llm)
     return socketio.ASGIApp(sio, other_asgi_app=api)

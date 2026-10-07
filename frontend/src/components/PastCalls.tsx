@@ -30,6 +30,9 @@ export function PastCalls({ token, onOpen }: Props) {
               <span className="past-call-when">{new Date(call.created_at * 1000).toLocaleString()}</span>
               <span className="past-call-preview">{call.preview || 'No transcript'}</span>
               <span className="muted small">
+                {call.summary?.status === 'ready' && call.summary.sentiment && (
+                  <span className={`pill sentiment-${call.summary.sentiment}`}>{call.summary.sentiment}</span>
+                )}{' '}
                 {call.kind === 'import' ? 'Import' : call.code} · {call.lines} line{call.lines === 1 ? '' : 's'}
               </span>
             </button>

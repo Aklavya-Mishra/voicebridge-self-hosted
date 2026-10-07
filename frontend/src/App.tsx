@@ -4,7 +4,7 @@ import { Home } from './components/Home'
 import { ImportView } from './components/ImportView'
 import { TranscriptView } from './components/TranscriptView'
 import { Login } from './components/Login'
-import { connectAgent } from './lib/agent'
+import { AGENT_DOWNLOAD, connectAgent } from './lib/agent'
 import { ApiError, fetchMe, health } from './lib/api'
 import { loadAuth, saveAuth, type StoredAuth } from './lib/storage'
 
@@ -13,6 +13,12 @@ type View =
   | { name: 'call'; code: string; callName: string }
   | { name: 'transcript'; code: string }
   | { name: 'import' }
+
+/** "deepgram (fallback: whisper)" -> "Deepgram"; the full text stays in the tooltip. */
+const sttLabel = (provider: string) => {
+  const name = provider.split(' (')[0]
+  return name.charAt(0).toUpperCase() + name.slice(1)
+}
 
 export default function App() {
   const [auth, setAuth] = useState<StoredAuth | null>(() => loadAuth())
@@ -79,7 +85,26 @@ export default function App() {
           <img src="/favicon.svg" alt="" width={24} height={24} /> VoiceBridge
         </div>
         <div className="topbar-right">
-          {provider && <span className={`pill ${provider === 'offline' ? 'bad' : ''}`}>STT: {provider}</span>}
+          {auth &&
+            (agentFound ? (
+              <span className="pill ok" title="The VoiceBridge Agent on this PC captures your mic and the computer's audio">
+                ● Agent connected
+              </span>
+            ) : (
+              <a
+                className="pill warn"
+                href={AGENT_DOWNLOAD}
+                download
+                title="The VoiceBridge Agent (Windows) captures your mic and the computer's audio from any call app, without sharing your screen. Download it and run it once; it stays in the system tray."
+              >
+                ○ Agent off · Get it
+              </a>
+            ))}
+          {provider && (
+            <span className={`pill ${provider === 'offline' ? 'bad' : ''}`} title={`Speech-to-text: ${provider}`}>
+              STT: {sttLabel(provider)}
+            </span>
+          )}
           {auth && (
             <>
               <span className="muted">{auth.user.name}</span>
@@ -109,7 +134,6 @@ export default function App() {
         ) : (
           <Home
             token={auth.token}
-            agentFound={agentFound}
             defaultName={auth.user.name}
             onOpenCall={(code, callName) => setView({ name: 'call', code, callName })}
             onOpenTranscript={(code) => setView({ name: 'transcript', code })}

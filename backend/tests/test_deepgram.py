@@ -287,13 +287,14 @@ def test_make_stt_with_key_wraps_fallback():
 async def test_socket_handlers_use_deepgram_stream_with_local_fallback():
     import socketio
 
+    from app.llm import LlmChain
     from app.pipeline import ParticipantStream
     from app.sessions import SessionStore
     from app.socket_events import SocketHandlers
 
     settings = Settings(deepgram_api_key="k", deepgram_url="ws://127.0.0.1:9/v1/listen")
     handlers = SocketHandlers(socketio.AsyncServer(async_mode="asgi"), SessionStore(), settings,
-                              DeepgramSTT(settings, fallback=RecordingSTT("local")))
+                              DeepgramSTT(settings, fallback=RecordingSTT("local")), LlmChain([]))
     stream = handlers._new_stream("ABCDEF", SPEAKER)
     assert isinstance(stream, DeepgramParticipantStream)
     assert isinstance(stream._make_fallback(), ParticipantStream)

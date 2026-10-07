@@ -43,3 +43,8 @@ test('a long pause from the same speaker starts a new line, as on screen', () =>
 test('empty call gives an empty transcript', () => {
   assert.equal(formatTranscript([]), '')
 })
+
+test('reading view: consecutive lines of one speaker become one paragraph despite pauses', () => {
+  const text = formatTranscript([msg('1', 'me', 'Aklavya', 'One.', 0, 1), msg('2', 'me', 'Aklavya', 'Two.', 5, 6)], Infinity)
+  assert.equal(text, 'Aklavya: One. Two.\n')
+})

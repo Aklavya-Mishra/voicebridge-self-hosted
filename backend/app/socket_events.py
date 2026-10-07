@@ -1,6 +1,7 @@
 """Socket.IO events for live sessions.
 
-Client -> server: join_session {code, name?}, audio_chunk {code, audio, channels?}, stop_audio {code}, leave_session {code}
+Client -> server: join_session {code, name?}, rename_speaker {code, speaker_id, name} -> ack {ok, error?},
+  audio_chunk {code, audio, channels?}, stop_audio {code}, leave_session {code}
   audio is PCM16 at the configured sample rate. channels=2 means interleaved stereo from one endpoint:
   left = the user's mic, right = the call audio (the remote person, who does not run VoiceBridge).
   Each channel gets its own STT stream; the channel decides the speaker.
@@ -12,7 +13,8 @@ one per user):
   server -> web: agent_status {online}
   The agent streams stereo audio_chunk (mic + speaker loopback) only into sessions it was started for.
 Server -> client: participants {code, participants}, transcript {...see pipeline payload},
-                  stt_status {code, speaker, engine, reason} when a speaker falls back to local STT
+                  stt_status {code, speaker, engine, reason} when a speaker falls back to local STT,
+                  speaker_renamed {code, speaker_id, name}
 """
 import asyncio
 import logging
@@ -21,8 +23,10 @@ import time
 import numpy as np
 import socketio
 
+from app.analysis import analyse_session, mask_text
 from app.auth import AuthError, verify_token
 from app.config import Settings
+from app.llm import LlmChain
 from app.pipeline import DeepgramParticipantStream, ParticipantStream, StreamingParticipantStream
 from app.segmenter import Segmenter
 from app.sessions import SessionError, SessionStore, Utterance, normalize_code
@@ -40,6 +44,9 @@ CALL_SPEAKER_NAME = "Computer"
 # How long the agent has to confirm start_recording.
 AGENT_ACK_TIMEOUT_S = 5.0
 
+# After the last stream of a call closes, wait this long before analysing it (the mic may restart).
+ANALYSIS_DELAY_S = 1.0
+
 # Re-anchor a stream's clock to arrival time when the gap is bigger than this (seconds).
 CLOCK_RESYNC_S = 1.0
 
@@ -52,8 +59,8 @@ def user_room(user_id: str) -> str:
     return f"user:{user_id}"
 
 
-def call_speaker(user: dict) -> dict:
-    return {"id": f"{user['id']}-call", "name": CALL_SPEAKER_NAME}
+def call_speaker_id(user: dict) -> str:
+    return f"{user['id']}-call"
 
 
 def split_stereo(pcm: bytes) -> tuple[bytes, bytes]:
@@ -62,8 +69,12 @@ def split_stereo(pcm: bytes) -> tuple[bytes, bytes]:
 
 
 class SocketHandlers:
-    def __init__(self, sio: socketio.AsyncServer, store: SessionStore, settings: Settings, stt: STTProvider):
+    def __init__(
+        self, sio: socketio.AsyncServer, store: SessionStore, settings: Settings, stt: STTProvider, llm: LlmChain
+    ):
         self._sio = sio
+        self._llm = llm
+        self._analysis: dict[str, asyncio.Task] = {}  # session code -> pending end-of-call analysis
         self._store = store
         self._settings = settings
         self._stt = stt
@@ -72,8 +83,10 @@ class SocketHandlers:
         self._clocks: dict[tuple[str, str], float] = {}
         self._agents: dict[str, str] = {}  # user id -> agent sid
         self._agent_codes: dict[str, set[str]] = {}  # user id -> sessions the agent is recording
+        # The speaker dict each live stream reads its name from; a rename updates it in place.
+        self._stream_speakers: dict[tuple[str, str], dict] = {}
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
-                  "agent_start", "agent_stop")
+                  "agent_start", "agent_stop", "rename_speaker")
         for name in events:
             sio.on(name, getattr(self, name))
 
@@ -169,7 +182,7 @@ class SocketHandlers:
         ts = self._chunk_ts(key, len(mic))  # one clock for both channels: they were captured together
         await asyncio.gather(
             self._stream_for(code, user).push(mic, ts),
-            self._stream_for(code, call_speaker(user)).push(call, ts),
+            self._stream_for(code, self._call_speaker(code, user)).push(call, ts),
         )
 
     async def stop_audio(self, sid: str, data: dict) -> None:
@@ -190,6 +203,31 @@ class SocketHandlers:
         participants = self._store.get(code).participants
         return {"id": user["id"], "name": participants.get(user["id"], user["name"])}
 
+    def _call_speaker(self, code: str, user: dict) -> dict:
+        """The user's call-audio channel: "Computer" unless renamed in this call."""
+        speaker_id = call_speaker_id(user)
+        return {"id": speaker_id, "name": self._store.speaker_name(code, speaker_id, CALL_SPEAKER_NAME)}
+
+    async def rename_speaker(self, sid: str, data: dict) -> dict:
+        state = await self._sio.get_session(sid)
+        code = normalize_code((data or {}).get("code"))
+        speaker_id = str((data or {}).get("speaker_id") or "")
+        if code not in state["codes"]:
+            return {"ok": False, "error": "Join the session first"}
+        try:
+            self._store.rename_speaker(code, speaker_id, (data or {}).get("name"))
+        except SessionError as exc:
+            return {"ok": False, "error": str(exc)}
+        name = self._store.speaker_name(code, speaker_id, "")
+        live = self._stream_speakers.get((code, speaker_id))
+        if live is not None:
+            live["name"] = name  # lines still to come use the new name
+        await self._sio.emit(
+            "speaker_renamed", {"code": code, "speaker_id": speaker_id, "name": name}, room=room_for(code)
+        )
+        await self._broadcast_participants(code)
+        return {"ok": True}
+
     def _stream_for(self, code: str, speaker: dict) -> LiveStream:
         return self._streams.get((code, speaker["id"])) or self._new_stream(code, speaker)
 
@@ -202,10 +240,16 @@ class SocketHandlers:
         await self._sio.leave_room(sid, room_for(code))
 
     def _new_stream(self, code: str, user: dict) -> LiveStream:
+        masking = self._settings.pii_masking
+
         async def emit(payload: dict) -> None:
+            if masking:
+                payload = {**payload, "text": mask_text(payload["text"])}
             await self._sio.emit("transcript", payload, room=room_for(code))
 
         async def on_final(utterance: Utterance) -> None:
+            if masking:
+                utterance.text = mask_text(utterance.text)
             self._store.add_utterance(code, utterance)
 
         async def notify(payload: dict) -> None:
@@ -226,6 +270,7 @@ class SocketHandlers:
         else:
             stream = self._local_stream(code, user, self._stt, emit, on_final)
         self._streams[(code, user["id"])] = stream
+        self._stream_speakers[(code, user["id"])] = user
         return stream
 
     def _local_stream(
@@ -269,8 +314,30 @@ class SocketHandlers:
 
     async def _close_stream(self, code: str, user_id: str) -> None:
         self._clocks.pop((code, user_id), None)
+        for speaker_id in (user_id, f"{user_id}-call"):
+            self._stream_speakers.pop((code, speaker_id), None)
         streams = [self._streams.pop((code, sid), None) for sid in (user_id, f"{user_id}-call")]
         await asyncio.gather(*(stream.close() for stream in streams if stream is not None))
+        if any(s is not None for s in streams) and not any(c == code for c, _ in self._streams):
+            self._schedule_analysis(code)
+
+    def _schedule_analysis(self, code: str) -> None:
+        """Summarise the call once nobody is streaming into it; a restarted mic postpones it."""
+        if not self._settings.call_analysis:
+            return
+        previous = self._analysis.pop(code, None)
+        if previous:
+            previous.cancel()
+
+        async def run() -> None:
+            await asyncio.sleep(ANALYSIS_DELAY_S)
+            if any(c == code for c, _ in self._streams):
+                return  # recording again; analysed when it stops
+            await analyse_session(self._store, code, self._llm)
+
+        task = asyncio.create_task(run())
+        self._analysis[code] = task
+        task.add_done_callback(lambda t: self._analysis.pop(code, None) if self._analysis.get(code) is t else None)
 
     def _chunk_ts(self, key: tuple[str, str], nbytes: int) -> float:
         """Start time of this chunk: continue from the previous chunk unless the gap is too big."""

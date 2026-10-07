@@ -5,6 +5,7 @@ import { MicCapture } from '../lib/mic'
 import { formatTranscript } from '../lib/transcript'
 import { fromUtterance, type ChatMessage, type Session, type SttStatusEvent, type TranscriptEvent, type User } from '../lib/types'
 import { Chat } from './Chat'
+import { EditableName } from './EditableName'
 
 interface Props {
   code: string
@@ -33,6 +34,8 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
   const [copied, setCopied] = useState(false)
   // Speakers whose transcription fell back from Deepgram to the local engine: id -> name.
   const [localEngine, setLocalEngine] = useState<Map<string, string>>(new Map())
+  // Renamed speakers who are not participants (the call audio): id -> name.
+  const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({})
   const socketRef = useRef<Socket | null>(null)
   const micRef = useRef<MicCapture | null>(null)
 
@@ -69,7 +72,9 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
       setParticipants(session.participants)
       setOriginTs(session.created_at)
       setMessages(new Map(session.transcript.map((u) => [u.id, fromUtterance(u)])))
+      setSpeakerNames(session.speaker_names ?? {})
       setStatus('joined')
+      setError('') // e.g. "Cannot reach the server" from before the connection recovered
     })
     socket.on('connect_error', (err) => {
       if (err.message === 'unauthorized') onAuthExpired()
@@ -80,6 +85,15 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
     })
     socket.on('participants', (data: { participants: User[] }) => setParticipants(data.participants))
     socket.on('transcript', upsert)
+    socket.on('speaker_renamed', (data: { speaker_id: string; name: string }) => {
+      setSpeakerNames((prev) => ({ ...prev, [data.speaker_id]: data.name }))
+      setMessages(
+        (prev) =>
+          new Map(
+            [...prev].map(([id, m]) => [id, m.speakerId === data.speaker_id ? { ...m, speakerName: data.name } : m]),
+          ),
+      )
+    })
     socket.on('agent_status', (data: { online: boolean }) => setAgentOnline(data.online))
     socket.on('stt_status', (data: SttStatusEvent) =>
       setLocalEngine((prev) => {
@@ -161,6 +175,16 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
 
   const sorted = useMemo(() => [...messages.values()].sort((a, b) => a.startTs - b.startTs), [messages])
   const other = participants.find((p) => p.id !== me.id)
+  // The call-audio side (desktop agent): "Computer" until renamed.
+  const callSpeakerId = `${me.id}-call`
+  const callSideName = speakerNames[callSpeakerId] ?? 'Computer'
+  const hasCallSide = viaAgent || sorted.some((m) => m.speakerId === callSpeakerId)
+
+  /** Renames a speaker for the whole call: past lines, new lines, the saved transcript and summary. */
+  const rename = async (speakerId: string, name: string) => {
+    const ack = await socketRef.current?.emitWithAck('rename_speaker', { code, speaker_id: speakerId, name })
+    if (!ack?.ok) throw new Error(ack?.error ?? 'Could not rename')
+  }
   const myName = participants.find((p) => p.id === me.id)?.name ?? callName
 
   const downloadTranscript = () => {
@@ -183,10 +207,14 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
           </button>
         </div>
         <div className="people">
-          <span className="person mine">You · {myName}</span>
-          <span className={`person theirs ${other || viaAgent ? '' : 'waiting'}`}>
-            {other ? other.name : viaAgent ? 'Computer' : 'Waiting for the other person…'}
-          </span>
+          <EditableName className="person mine" prefix="You · " name={myName} onSave={(n) => rename(me.id, n)} />
+          {other ? (
+            <span className="person theirs">{other.name}</span>
+          ) : hasCallSide ? (
+            <EditableName className="person theirs" name={callSideName} onSave={(n) => rename(callSpeakerId, n)} />
+          ) : (
+            <span className="person theirs waiting">Waiting for the other person…</span>
+          )}
         </div>
         <div className="call-actions">
           {recording ? (

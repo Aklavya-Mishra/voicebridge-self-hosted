@@ -11,6 +11,7 @@
   --theirs-bg: #ffffff;
   --theirs-text: #17202a;
   --danger: #b42318;
+  --warn: #b54708;
   --shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
   color-scheme: light;
   font-family: Inter, 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -31,6 +32,7 @@
     --theirs-bg: #1f2b33;
     --theirs-text: #e6edf2;
     --danger: #f97066;
+    --warn: #fdb022;
     --shadow: none;
     color-scheme: dark;
   }
@@ -135,6 +137,18 @@ label {
   color: var(--danger);
   border-color: var(--danger);
 }
+.pill.ok {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.pill.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+  text-decoration: none;
+}
+.pill.warn:hover {
+  background: var(--surface);
+}
 
 main {
   flex: 1;
@@ -223,13 +237,94 @@ main {
   gap: 1rem;
   margin-bottom: 1rem;
 }
+.summary-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+}
+.summary-box p {
+  margin: 0.5rem 0;
+  line-height: 1.5;
+}
+.summary-box dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 1rem;
+}
+.summary-box dt {
+  color: var(--muted);
+}
+.summary-box dd {
+  margin: 0;
+}
+.summary-box ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.summary-tags {
+  display: flex;
+  gap: 0.4rem;
+}
+.sentiment-positive {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.sentiment-negative {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+@media (max-width: 600px) {
+  .summary-box dl {
+    grid-template-columns: 1fr;
+  }
+}
 .transcript-line {
   margin: 0 0 0.6rem;
   line-height: 1.5;
 }
-.agent-ok {
-  color: var(--accent);
-  font-weight: 600;
+.icon-button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0 0 0 0.35rem;
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+.icon-button:hover {
+  opacity: 1;
+}
+.person.name-edit {
+  /* Same footprint as the name pill: one line, input and buttons inline. */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  padding: 0.1rem 0.3rem 0.1rem 0.6rem;
+}
+/* Beats the app-wide full-width field style. */
+.name-edit input:not([type='radio']):not([type='file']) {
+  /* Width follows the name (set inline in ch), so the pill barely grows while editing. */
+  min-width: 6ch;
+  max-width: 18ch;
+  margin-left: 0.15rem;
+  padding: 0.05rem 0.45rem;
+  font-size: inherit;
+  line-height: 1.4;
+  border-radius: 999px;
+}
+.name-edit .icon-button {
+  padding: 0 0.3rem;
+  font-size: 0.95em;
+  line-height: 1.4;
+}
+.name-edit .icon-button.save {
+  font-weight: 700;
+}
+.name-edit .icon-button:disabled {
+  opacity: 0.35;
 }
 .notice {
   color: var(--muted);
@@ -239,8 +334,13 @@ main {
 
 .home-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+}
+@media (max-width: 640px) {
+  .home-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .code-input {
   font-family: ui-monospace, Consolas, monospace;
@@ -255,11 +355,23 @@ main {
   height: calc(100vh - 7rem);
 }
 .call-header {
-  display: flex;
-  flex-wrap: wrap;
+  /* Fixed columns: invite code | names | buttons. Names wrap inside their column, so editing a name
+     never pushes the buttons to another line. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
+}
+.call-header .people {
+  justify-content: flex-end;
+}
+@media (max-width: 720px) {
+  .call-header {
+    grid-template-columns: 1fr;
+  }
+  .call-header .people {
+    justify-content: flex-start;
+  }
 }
 .call-header .card,
 .call-header button {

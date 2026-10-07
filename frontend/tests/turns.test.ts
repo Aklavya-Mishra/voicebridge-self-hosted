@@ -36,3 +36,11 @@ test('speaker change starts a new bubble', () => {
     ['a', 'b'],
   )
 })
+
+test('with no gap limit, a speaker keeps one turn until someone else speaks', () => {
+  const turns = toTurns([msg('a1', 'a', 0, 2), msg('a2', 'a', 30, 31), msg('b1', 'b', 32, 33), msg('a3', 'a', 60, 61)], Infinity)
+  assert.deepEqual(
+    turns.map((t) => t.parts.map((p) => p.id)),
+    [['a1', 'a2'], ['b1'], ['a3']],
+  )
+})

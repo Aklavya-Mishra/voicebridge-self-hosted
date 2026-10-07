@@ -20,7 +20,25 @@ export interface Session {
   created_at: number
   participants: User[]
   transcript: Utterance[]
+  summary: CallSummary | null
+  /** Names given to speakers who are not participants, e.g. "<user id>-call" renamed from "Computer". */
+  speaker_names?: Record<string, string>
 }
+
+/** End-of-call analysis, made by the backend once a call stops. */
+export type CallSummary =
+  | { status: 'pending' }
+  | { status: 'unavailable' }
+  | {
+      status: 'ready'
+      provider: string
+      summary: string
+      purpose: string
+      action_items: string[]
+      outcome: string
+      sentiment: 'positive' | 'neutral' | 'negative'
+      // quality: number  // disabled in the backend (app/analysis.py)
+    }
 
 /** Server `transcript` event. A final with empty text means "drop this bubble". */
 export interface TranscriptEvent {
@@ -49,6 +67,7 @@ export interface SessionSummary {
   participants: User[]
   lines: number
   preview: string
+  summary: { status: CallSummary['status']; sentiment?: string } | null
 }
 
 export interface ChatMessage {

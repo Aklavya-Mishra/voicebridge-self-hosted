@@ -42,6 +42,16 @@ class Settings:
     deepgram_endpointing_ms: int = 300  # silence that ends a sentence
     deepgram_connect_timeout_s: float = 3.0
     gemini_api_key: str | None = None
+    # End-of-call analysis (summary + PII). Provider order: Gemini (GEMINI_API_KEY), Anthropic
+    # (ANTHROPIC_API_KEY), then the local model through Ollama, which needs no key.
+    call_analysis: bool = False  # from_env turns it on
+    pii_masking: bool = True  # mask long numbers and emails as each line is finalised
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-opus-5-5"
+    llm_model: str = "qwen2.5:7b"  # local Ollama model
+    ollama_url: str = "http://127.0.0.1:11434"
+    llm_num_ctx: int = 16384  # tokens of context: about an hour of call
+    llm_cpu_only: bool = True
     gemini_model: str = "gemini-2.5-flash-lite"
     vertex_project: str | None = None
     vertex_location: str = "us-central1"
@@ -88,6 +98,14 @@ class Settings:
             deepgram_endpointing_ms=int(env("DEEPGRAM_ENDPOINTING_MS", cls.deepgram_endpointing_ms)),
             deepgram_connect_timeout_s=float(env("DEEPGRAM_CONNECT_TIMEOUT_S", cls.deepgram_connect_timeout_s)),
             gemini_api_key=env("GEMINI_API_KEY") or None,
+            call_analysis=_bool(env("CALL_ANALYSIS", "true")),
+            pii_masking=_bool(env("PII_MASKING", "true")),
+            anthropic_api_key=env("ANTHROPIC_API_KEY") or None,
+            anthropic_model=env("ANTHROPIC_MODEL", cls.anthropic_model),
+            llm_model=env("LLM_MODEL", cls.llm_model),
+            ollama_url=env("OLLAMA_URL", cls.ollama_url),
+            llm_num_ctx=int(env("LLM_NUM_CTX", cls.llm_num_ctx)),
+            llm_cpu_only=_bool(env("LLM_CPU_ONLY", "true")),
             gemini_model=env("GEMINI_MODEL", cls.gemini_model),
             vertex_project=env("VERTEX_PROJECT") or None,
             vertex_location=env("VERTEX_LOCATION", cls.vertex_location),

@@ -47,6 +47,9 @@ def test_list_for_user_newest_first_with_preview(tmp_path):
     assert [c["code"] for c in calls] == [new.code, old.code]
     assert calls[1]["lines"] == 1 and calls[1]["preview"] == "First call."
     assert calls[0]["lines"] == 0 and calls[0]["preview"] == ""
+    assert calls[0]["summary"] is None
+    store.set_summary(old.code, {"status": "ready", "sentiment": "positive", "summary": "long text"})
+    assert store.list_for("u1")[1]["summary"] == {"status": "ready", "sentiment": "positive"}
 
 
 def test_without_db_path_nothing_is_written(tmp_path, monkeypatch):

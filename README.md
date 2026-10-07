@@ -19,7 +19,8 @@ backend/   FastAPI + Socket.IO: auth, invite-code sessions, per-channel STT (Dee
 
 ## Run locally
 
-Requirements: Python 3.11+, Node 20+, ffmpeg on PATH (for imports).
+Requirements: Python 3.11+, Node 20+, ffmpeg on PATH (for imports), and [Ollama](https://ollama.com) with
+`ollama pull qwen2.5:7b` for call summaries (not needed if you set a Gemini or Anthropic key, see below).
 
 ```bash
 # backend
@@ -46,6 +47,8 @@ npm run dev                     # http://localhost:5173
    - no agent: **Mic only** transcribes just your side (the dialog says the agent is not running).
 3. The chat shows your speech on the left and the other side on the right. Consecutive sentences from one
    speaker share a bubble; a pause of 3 s or more, or a speaker change, starts a new one.
+   The ✎ next to a name in the call header renames that speaker for the whole call (e.g. **Computer** to
+   the caller's real name): earlier lines, new lines, the saved transcript and the summary.
 4. **Transcript** downloads the call as text, one line per bubble:
 
    ```
@@ -57,7 +60,26 @@ npm run dev                     # http://localhost:5173
 5. **Leave** asks for confirmation; it also stops the agent's recording for that call.
 6. Every call is saved as it happens (each finished sentence) in `backend/data/voicebridge.db` (SQLite;
    `DB_PATH` changes the location). **Past calls** on the home page lists them, newest first; opening one
-   shows its transcript (`Name: text` lines) with a Back button.
+   shows its summary and transcript (`Name: text`, one paragraph per speaker turn) with a Back button.
+7. Long numbers (card, phone, account) and emails are masked as `xxxxx` the moment a line is final, so they
+   are never shown or saved in clear. When a call stops, it is analysed in the background (seconds on a
+   cloud model, ~15-25 s for a short call on CPU): summary, purpose, outcome, action items and the caller's
+   sentiment, plus masking of what patterns miss (expiry dates, CVVs, addresses,
+   numbers read out in words). People's names are never masked.
+
+### Call analysis: which model
+
+Set in `backend/.env`. The first available provider is used; if it fails (quota, network), the next is
+tried:
+
+1. **Gemini**, when `GEMINI_API_KEY` is set (`GEMINI_MODEL`, default `gemini-2.5-flash-lite`).
+2. **Anthropic**, when `ANTHROPIC_API_KEY` is set (`ANTHROPIC_MODEL`, default `claude-opus-5-5`).
+3. **Local model**, always: `LLM_MODEL` (default `qwen2.5:7b`) through Ollama at `OLLAMA_URL`, on the CPU
+   only (`LLM_CPU_ONLY=true`). Free, nothing leaves the PC. Chosen after testing small open models on CPU:
+   `qwen3:4b` miscopied card numbers and `gemma3:4b` padded its answers; `qwen2.5:7b` was exact, ~11 s.
+
+The backend log names the order at start (`Call analysis with: ollama`). `CALL_ANALYSIS=false` turns the
+summaries off; `PII_MASKING=false` turns masking off.
 
 ### Desktop agent (Windows)
 
@@ -145,5 +167,7 @@ cd agent && .venv/Scripts/python -m pytest
   are transcribed as the other side; it also keeps transcribing your mic while you are muted in the call
   app. A full native endpoint is planned if the POC is approved.
 - Proper names are often misheard.
+- The local summary model is good at short calls; very long calls (well over an hour) exceed its context
+  (`LLM_NUM_CTX`) and are summarised from what fits.
 - Imports must be stereo with one speaker per channel; mono files are rejected.
 - Use a headset: on speakers your mic can also pick up the other person.

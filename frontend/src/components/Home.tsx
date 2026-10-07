@@ -1,5 +1,4 @@
 import { useState, type FormEvent } from 'react'
-import { AGENT_DOWNLOAD } from '../lib/agent'
 import { createSession } from '../lib/api'
 import { loadCallName, saveCallName } from '../lib/storage'
 import { PastCalls } from './PastCalls'
@@ -8,7 +7,6 @@ interface Props {
   token: string
   /** Pre-fills "Your name in this call" when no name was entered before. */
   defaultName: string
-  agentFound: boolean
   /** Opens a live call; `callName` is recorded on this user's lines. */
   onOpenCall: (code: string, callName: string) => void
   onOpenTranscript: (code: string) => void
@@ -17,7 +15,7 @@ interface Props {
 
 const MAX_NAME_LENGTH = 40
 
-export function Home({ token, defaultName, agentFound, onOpenCall, onOpenTranscript, onImport }: Props) {
+export function Home({ token, defaultName, onOpenCall, onOpenTranscript /* , onImport: used by the hidden Import card */ }: Props) {
   const [code, setCode] = useState('')
   const [callName, setCallName] = useState(() => loadCallName() || defaultName)
   const name = callName.trim()
@@ -88,28 +86,13 @@ export function Home({ token, defaultName, agentFound, onOpenCall, onOpenTranscr
           Join
         </button>
       </form>
-      <section className="card">
-        <h2>Desktop agent</h2>
-        <p className="muted">
-          Transcribes any call app (Meet, Teams, Zoom…) without sharing your screen: your mic on your side, the
-          computer's audio on the other side. Windows only.
-        </p>
-        {agentFound ? (
-          <p className="agent-ok">Agent connected on this PC</p>
-        ) : (
-          <>
-            <a className="button" href={AGENT_DOWNLOAD} download>
-              Download agent (.exe)
-            </a>
-            <p className="muted small">Run it once; it stays in the system tray and starts with Windows.</p>
-          </>
-        )}
-      </section>
+      {/* Import is hidden while the app is used live; restore this card to bring it back.
       <section className="card">
         <h2>Import a recording</h2>
         <p className="muted">Stereo file, one person per channel. You pick which side is you.</p>
         <button onClick={onImport}>Import file</button>
       </section>
+      */}
       <PastCalls token={token} onOpen={onOpenTranscript} />
       {error && <p className="error">{error}</p>}
     </div>
