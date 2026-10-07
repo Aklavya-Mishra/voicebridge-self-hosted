@@ -1,0 +1,15 @@
+PyAudioWPatch==0.2.12.9
+soxr==1.1.0
+numpy==2.4.6
+python-socketio[asyncio_client]==5.17.0
+aiohttp==3.14.4
+httpx==0.28.1
+
+# tests
+pytest
+pytest-asyncio
+
+# desktop build (.exe with tray icon)
+pystray==0.19.5
+pillow==12.3.0
+pyinstaller==6.22.3
