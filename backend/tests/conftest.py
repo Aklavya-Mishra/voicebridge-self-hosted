@@ -40,4 +40,5 @@ class RecordingSTT:
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(jwt_secret="test-secret", partial_interval_ms=500)
+    # 700 ms bubbles keep these short test recordings quick; the 3 s default is covered in test_deepgram.
+    return Settings(jwt_secret="test-secret", partial_interval_ms=500, end_silence_ms=700)

@@ -209,7 +209,7 @@ def start_tray(stop: threading.Event) -> Tray:
     from PIL import Image, ImageDraw
 
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    ImageDraw.Draw(image).ellipse((4, 4, 60, 60), fill=(15, 118, 110, 255))
+    ImageDraw.Draw(image).ellipse((4, 4, 60, 60), fill=(79, 70, 229, 255))
     icon = pystray.Icon(APP_NAME, image, "VoiceBridge Agent", menu=pystray.Menu(
         pystray.MenuItem(lambda item: f"VoiceBridge: {icon.title.split(': ', 1)[-1]}", None, enabled=False),
         pystray.MenuItem("Quit", lambda: (stop.set(), icon.stop())),

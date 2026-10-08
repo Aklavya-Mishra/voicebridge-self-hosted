@@ -24,7 +24,7 @@ class Settings:
     sample_rate: int = 16000
     vad_provider: str = "energy"  # energy | silero
     vad_energy_threshold_dbfs: float = -45.0
-    end_silence_ms: int = 700
+    end_silence_ms: int = 3000  # silence that ends a chat bubble (Deepgram and local)
     max_utterance_ms: int = 15000
     min_speech_ms: int = 250
     preroll_ms: int = 200

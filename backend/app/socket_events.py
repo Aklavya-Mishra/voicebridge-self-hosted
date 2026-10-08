@@ -295,6 +295,7 @@ class SocketHandlers:
                 notify=notify,
                 make_fallback=lambda: self._local_stream(code, user, fallback, emit, on_final),
                 on_start=on_start,
+                bubble_gap_s=self._settings.end_silence_ms / 1000,
             )
         else:
             stream = self._local_stream(code, user, self._stt, emit, on_final)

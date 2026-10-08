@@ -10,7 +10,7 @@ from websockets.asyncio.server import serve
 from app.config import Settings
 from app.pipeline import DeepgramParticipantStream
 from app.stt.deepgram import DeepgramSTT
-from tests.conftest import SR, RecordingSTT, chunks, tone
+from tests.conftest import SR, RecordingSTT, chunks, silence, tone
 
 SPEAKER = {"id": "a", "name": "Aklavya"}
 T0 = 1000.0  # server clock of the first audio sample
@@ -172,6 +172,40 @@ async def test_live_partials_then_final_sentence():
     assert [f["text"] for f in finals] == ["hello world"]
     assert finals[0]["utterance_id"] == partials[0]["utterance_id"]
     assert not notices and not fallbacks
+
+
+async def test_short_pauses_stay_in_one_bubble():
+    """A pause Deepgram ends a sentence on (speech_final) is not a new bubble: only 3 s of silence is."""
+    async def script(ws, received):
+        if received == 1.0:
+            await ws.send(results("hello", 0.0, 1.0, is_final=True, speech_final=True))
+        elif received == 2.5:
+            await ws.send(results("world", 1.5, 1.0, is_final=True, speech_final=True))
+
+    async with FakeDeepgram(script) as server:
+        stream, emitted, stored, *_ = build(server.url)
+        await feed(stream, tone(2.5))
+        await stream.close()
+
+    assert [u.text for u in stored] == ["hello world"]
+
+
+async def test_three_seconds_of_silence_ends_the_bubble():
+    async def script(ws, received):
+        if received == 1.0:
+            await ws.send(results("hello", 0.0, 1.0, is_final=True, speech_final=True))
+        elif received == 5.5:
+            await ws.send(results("again", 5.0, 0.5, is_final=True, speech_final=True))
+
+    async with FakeDeepgram(script) as server:
+        stream, emitted, stored, *_ = build(server.url)
+        await feed(stream, tone(1.0) + silence(3.5))
+        assert [u.text for u in stored] == ["hello"]  # stored once 3 s passed, before the next words
+        await feed(stream, tone(1.0), start_ts=T0 + 4.5)
+        await stream.close()
+
+    assert [u.text for u in stored] == ["hello", "again"]
+    assert stored[0].id != stored[1].id
 
 
 async def test_finalized_text_without_pause_is_stored_on_close():

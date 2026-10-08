@@ -164,8 +164,9 @@ REPLAY_CHUNK_S = 0.1
 class DeepgramParticipantStream:
     """One live speaker streamed to Deepgram, with a local stream as fallback.
 
-    Deepgram sends interim results (shown as live text) and final results for stretches of audio;
-    a pause (speech_final / UtteranceEnd) ends the sentence, which is then stored.
+    Deepgram sends interim results (shown as live text) and final results for stretches of audio. All of
+    them go into one bubble until the speaker is silent for `bubble_gap_s` (3 s): then it is stored. Short
+    pauses (Deepgram's speech_final) do not end the bubble.
     Audio Deepgram has not finalised yet is kept. If the connection drops, one reconnect is tried
     and that audio is re-sent; if Deepgram is unreachable, the audio is replayed into the local
     stream from make_fallback() and this speaker stays local until the mic is restarted.
@@ -186,8 +187,10 @@ class DeepgramParticipantStream:
         notify: Emit,
         make_fallback: Callable[[], ParticipantStream],
         on_start: Callable[[float], Awaitable[None]] | None = None,
+        bubble_gap_s: float = 3.0,
     ):
         self._code = code
+        self._bubble_gap_s = bubble_gap_s
         self._speaker = speaker
         self._stt = stt
         self._sample_rate = sample_rate
@@ -230,6 +233,12 @@ class DeepgramParticipantStream:
                 self._clock_base_ts = ts - self._fed
             self._buffer += pcm
             self._fed += len(pcm) / 2 / self._sample_rate
+            if (
+                self._parts
+                and not self._interim
+                and self._fed - self._last_word >= self._bubble_gap_s
+            ):
+                await self._finish_sentence()  # silent long enough: the bubble is done
             if self._conn is not None and not self._dropped:
                 try:
                     await self._conn.send(pcm)
@@ -330,10 +339,7 @@ class DeepgramParticipantStream:
                 self._dropped = True
 
     async def _handle(self, message: dict) -> None:
-        if message.get("type") == "UtteranceEnd":
-            await self._finish_sentence()
-            return
-        if message.get("type") != "Results":
+        if message.get("type") != "Results":  # UtteranceEnd too: only a 3 s silence ends a bubble
             return
         alternative = message["channel"]["alternatives"][0]
         all_words = [
@@ -361,9 +367,7 @@ class DeepgramParticipantStream:
             self._last_word = part[0][-1][1]
         self._interim = []
         self._confirm(self._conn_offset + message["start"] + message["duration"])
-        if message.get("speech_final"):
-            await self._finish_sentence()
-        elif part:
+        if part:
             await self._emit(self._partial_payload())
 
     async def _start_sentence(self, first_word: float) -> None:
