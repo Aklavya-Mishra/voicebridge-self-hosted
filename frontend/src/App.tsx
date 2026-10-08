@@ -25,10 +25,14 @@ export default function App() {
   const [view, setView] = useState<View>({ name: 'home' })
   const [provider, setProvider] = useState('')
   const [agentFound, setAgentFound] = useState(false)
+  const [nbaEnabled, setNbaEnabled] = useState(false)
 
   useEffect(() => {
     health()
-      .then((h) => setProvider(h.stt_provider))
+      .then((h) => {
+        setProvider(h.stt_provider)
+        setNbaEnabled(Boolean(h.nba))
+      })
       .catch(() => setProvider('offline'))
   }, [])
 
@@ -122,6 +126,7 @@ export default function App() {
           <CallView
             code={view.code}
             callName={view.callName}
+            nbaEnabled={nbaEnabled}
             token={auth.token}
             me={auth.user}
             onLeave={goHome}
@@ -135,6 +140,7 @@ export default function App() {
           <Home
             token={auth.token}
             defaultName={auth.user.name}
+            nbaEnabled={nbaEnabled}
             onOpenCall={(code, callName) => setView({ name: 'call', code, callName })}
             onOpenTranscript={(code) => setView({ name: 'transcript', code })}
             onImport={() => setView({ name: 'import' })}

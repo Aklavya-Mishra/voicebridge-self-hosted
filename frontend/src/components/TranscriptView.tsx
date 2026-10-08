@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { getSession } from '../lib/api'
+import { hintsNewestFirst } from '../lib/assist'
 import { fromUtterance, type CallSummary, type Session } from '../lib/types'
+import { FactList, HintList } from './AssistPanel'
 
 interface Props {
   code: string
@@ -43,6 +45,14 @@ export function TranscriptView({ code, token, onBack }: Props) {
       </div>
       {error && <p className="error">{error}</p>}
       {session && lines.length > 0 && <SummaryBlock summary={session.summary} />}
+      {session && session.nba && (session.nba.hints.length > 0 || Object.keys(session.nba.facts).length > 0) && (
+        <section className="summary-box" aria-label="Live hints">
+          <h3>Hints during the call</h3>
+          <HintList hints={hintsNewestFirst(session.nba.hints)} />
+          <h3>Customer info</h3>
+          <FactList facts={session.nba.facts} />
+        </section>
+      )}
       {session && lines.length === 0 && <p className="muted">This call has no transcript.</p>}
       {lines.map((line) => (
         <p key={line.id} className="transcript-line">

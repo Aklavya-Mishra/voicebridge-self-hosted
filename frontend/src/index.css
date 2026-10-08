@@ -49,7 +49,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -87,7 +88,8 @@ button.link {
   padding: 0;
 }
 
-input:not([type='radio']):not([type='file']) {
+input:not([type='radio']):not([type='file']),
+select {
   width: 100%;
   padding: 0.55rem 0.7rem;
   border: 1px solid var(--border);
@@ -532,5 +534,108 @@ main {
   }
   .bubble {
     max-width: 88%;
+  }
+}
+
+.call-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0.75rem;
+}
+.call-body.solo {
+  grid-template-columns: minmax(0, 1fr);
+}
+.call-body .chat {
+  min-height: 0;
+}
+.assist {
+  margin: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.assist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.assist-head h2 {
+  margin: 0;
+}
+.assist-head select {
+  width: auto;
+  margin: 0;
+}
+.assist h3,
+.summary-box h3 {
+  font-size: 0.75rem;
+  margin: 0.6rem 0 0.2rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.hints {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.hint {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  opacity: 0.65;
+  overflow-wrap: anywhere;
+}
+.hint.latest {
+  opacity: 1;
+  border-color: var(--accent);
+}
+.hint.alert {
+  border-left: 3px solid var(--warn);
+}
+.hint-tag {
+  font-size: 0.7rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  margin-right: 0.4rem;
+}
+.facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+.fact {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: 0.5rem;
+}
+.fact dt {
+  color: var(--muted);
+}
+.fact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 860px) {
+  .call {
+    height: auto;
+  }
+  .call-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .call-body .chat {
+    height: 60vh;
   }
 }

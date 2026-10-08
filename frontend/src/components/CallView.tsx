@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { API_BASE } from '../lib/api'
+import { addHint, hintsNewestFirst } from '../lib/assist'
 import { MicCapture } from '../lib/mic'
 import { formatTranscript } from '../lib/transcript'
-import { fromUtterance, type ChatMessage, type Session, type SttStatusEvent, type TranscriptEvent, type User } from '../lib/types'
+import {
+  fromUtterance,
+  type ChatMessage,
+  type Domain,
+  type NbaDomainEvent,
+  type NbaHint,
+  type NbaStatusEvent,
+  type Session,
+  type SttStatusEvent,
+  type TranscriptEvent,
+  type User,
+} from '../lib/types'
+import { AssistPanel } from './AssistPanel'
 import { Chat } from './Chat'
 import { EditableName } from './EditableName'
 
@@ -13,13 +26,15 @@ interface Props {
   me: User
   /** Name entered for this call; recorded on this user's lines. */
   callName: string
+  /** Live hints are on (backend NBA_ENABLED). */
+  nbaEnabled: boolean
   onLeave: () => void
   onAuthExpired: () => void
 }
 
 type Status = 'connecting' | 'joined' | 'error'
 
-export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: Props) {
+export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAuthExpired }: Props) {
   const [status, setStatus] = useState<Status>('connecting')
   const [error, setError] = useState('')
   const [participants, setParticipants] = useState<User[]>([])
@@ -36,6 +51,11 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
   const [localEngine, setLocalEngine] = useState<Map<string, string>>(new Map())
   // Renamed speakers who are not participants (the call audio): id -> name.
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({})
+  const [domain, setDomain] = useState<Domain>('auto')
+  const [detected, setDetected] = useState<string | null>(null)
+  const [hints, setHints] = useState<NbaHint[]>([])
+  const [facts, setFacts] = useState<Record<string, string>>({})
+  const [nbaStatus, setNbaStatus] = useState<{ state: NbaStatusEvent['state']; reason?: string }>({ state: 'idle' })
   const socketRef = useRef<Socket | null>(null)
   const micRef = useRef<MicCapture | null>(null)
 
@@ -73,6 +93,10 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
       setOriginTs(session.created_at)
       setMessages(new Map(session.transcript.map((u) => [u.id, fromUtterance(u)])))
       setSpeakerNames(session.speaker_names ?? {})
+      setDomain(session.domain ?? 'auto')
+      setDetected(session.nba?.detected ?? null)
+      setHints(hintsNewestFirst(session.nba?.hints ?? []))
+      setFacts(session.nba?.facts ?? {})
       setStatus('joined')
       setError('') // e.g. "Cannot reach the server" from before the connection recovered
     })
@@ -103,6 +127,13 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
         return next
       }),
     )
+    socket.on('nba_hint', (hint: NbaHint) => setHints((prev) => addHint(prev, hint)))
+    socket.on('nba_facts', (data: { facts: Record<string, string> }) => setFacts(data.facts))
+    socket.on('nba_domain', (data: NbaDomainEvent) => {
+      setDomain(data.auto ? 'auto' : ((data.domain ?? 'auto') as Domain))
+      setDetected(data.auto ? data.domain : null)
+    })
+    socket.on('nba_status', (data: NbaStatusEvent) => setNbaStatus({ state: data.state, reason: data.reason }))
 
     return () => {
       void micRef.current?.stop()
@@ -155,6 +186,11 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
     }
     setRecording(false)
     setLevels([])
+  }
+
+  const changeDomain = async (next: Domain) => {
+    const ack = await socketRef.current?.emitWithAck('set_domain', { code, domain: next })
+    if (!ack?.ok) setError(ack?.error ?? 'Could not change the call type')
   }
 
   const leave = async () => {
@@ -250,12 +286,25 @@ export function CallView({ code, callName, token, me, onLeave, onAuthExpired }: 
       ))}
       {status === 'connecting' && <p className="muted">Connecting…</p>}
 
-      <Chat
-        messages={sorted}
-        myId={me.id}
-        originTs={originTs}
-        emptyHint={recording ? 'Listening… start talking.' : 'Start your mic to transcribe your side of the call.'}
-      />
+      <div className={nbaEnabled ? 'call-body' : 'call-body solo'}>
+        <Chat
+          messages={sorted}
+          myId={me.id}
+          originTs={originTs}
+          emptyHint={recording ? 'Listening… start talking.' : 'Start your mic to transcribe your side of the call.'}
+        />
+        {nbaEnabled && (
+          <AssistPanel
+            domain={domain}
+            detected={detected}
+            hints={hints}
+            facts={facts}
+            status={nbaStatus.state}
+            reason={nbaStatus.reason}
+            onDomainChange={changeDomain}
+          />
+        )}
+      </div>
 
       {leaveOpen && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="leave-title">

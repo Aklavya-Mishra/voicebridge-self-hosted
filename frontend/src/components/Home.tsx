@@ -1,12 +1,16 @@
 import { useState, type FormEvent } from 'react'
 import { createSession } from '../lib/api'
-import { loadCallName, saveCallName } from '../lib/storage'
+import { DOMAIN_OPTIONS } from '../lib/assist'
+import { loadCallName, loadDomain, saveCallName, saveDomain } from '../lib/storage'
+import type { Domain } from '../lib/types'
 import { PastCalls } from './PastCalls'
 
 interface Props {
   token: string
   /** Pre-fills "Your name in this call" when no name was entered before. */
   defaultName: string
+  /** Live hints are on: show the call-type picker. */
+  nbaEnabled: boolean
   /** Opens a live call; `callName` is recorded on this user's lines. */
   onOpenCall: (code: string, callName: string) => void
   onOpenTranscript: (code: string) => void
@@ -15,10 +19,11 @@ interface Props {
 
 const MAX_NAME_LENGTH = 40
 
-export function Home({ token, defaultName, onOpenCall, onOpenTranscript /* , onImport: used by the hidden Import card */ }: Props) {
+export function Home({ token, defaultName, nbaEnabled, onOpenCall, onOpenTranscript /* , onImport: used by the hidden Import card */ }: Props) {
   const [code, setCode] = useState('')
   const [callName, setCallName] = useState(() => loadCallName() || defaultName)
   const name = callName.trim()
+  const [domain, setDomain] = useState<Domain>(() => loadDomain())
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -26,8 +31,9 @@ export function Home({ token, defaultName, onOpenCall, onOpenTranscript /* , onI
     setBusy(true)
     setError('')
     try {
-      const { session } = await createSession(token)
+      const { session } = await createSession(token, nbaEnabled ? domain : 'auto')
       saveCallName(name)
+      saveDomain(domain)
       onOpenCall(session.code, name)
     } catch (err) {
       setError((err as Error).message)
@@ -64,6 +70,18 @@ export function Home({ token, defaultName, onOpenCall, onOpenTranscript /* , onI
           Your name is recorded on your lines. Someone on the call without VoiceBridge is recorded as Computer.
         </p>
         {nameField('start-name')}
+        {nbaEnabled && (
+          <>
+            <label htmlFor="start-domain">Call type (for live hints)</label>
+            <select id="start-domain" value={domain} onChange={(e) => setDomain(e.target.value as Domain)}>
+              {DOMAIN_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <button className="primary" onClick={start} disabled={busy || !name}>
           {busy ? 'Creating…' : 'Start session'}
         </button>
