@@ -23,6 +23,9 @@ export interface Session {
   summary: CallSummary | null
   /** Names given to speakers who are not participants, e.g. "<user id>-call" renamed from "Computer". */
   speaker_names?: Record<string, string>
+  /** Call type for live hints. */
+  domain?: Domain
+  nba?: NbaData
 }
 
 /** End-of-call analysis, made by the backend once a call stops. */
@@ -87,3 +90,37 @@ export const fromUtterance = (u: Utterance): ChatMessage => ({
   endTs: u.end_ts,
   final: true,
 })
+
+/** Call type for live hints; 'auto' lets the backend detect it from the first lines. */
+export type Domain = 'auto' | 'sales' | 'marketing' | 'telecom' | 'tech_support'
+
+/** A live hint for the advisor: from a pack rule (instant) or from the local model. */
+export interface NbaHint {
+  id: string
+  text: string
+  kind: 'rule' | 'ai'
+  intent: string | null
+  priority: 'alert' | 'suggestion'
+  ts: number
+}
+
+/** Live hint state saved with a call. */
+export interface NbaData {
+  hints: NbaHint[]
+  facts: Record<string, string>
+  detected: string | null
+}
+
+/** Server `nba_domain` event: the call type in use (null while auto has not detected one). */
+export interface NbaDomainEvent {
+  code: string
+  domain: string | null
+  auto: boolean
+}
+
+/** Server `nba_status` event. */
+export interface NbaStatusEvent {
+  code: string
+  state: 'thinking' | 'idle' | 'unavailable'
+  reason?: string
+}

@@ -1,4 +1,4 @@
-import type { User } from './types'
+import type { Domain, User } from './types'
 
 const KEY = 'voicebridge.auth'
 const STALE_TEST_NAMES = ['Asha']
@@ -47,6 +47,27 @@ export function saveAuth(auth: StoredAuth | null): void {
   try {
     if (auth) localStorage.setItem(KEY, JSON.stringify(auth))
     else localStorage.removeItem(KEY)
+  } catch {
+    // ignore
+  }
+}
+
+const DOMAIN_KEY = 'voicebridge.domain'
+const DOMAINS: Domain[] = ['auto', 'sales', 'marketing', 'telecom', 'tech_support']
+
+/** The call type last picked, to pre-select it for the next call. */
+export function loadDomain(): Domain {
+  try {
+    const saved = localStorage.getItem(DOMAIN_KEY) as Domain | null
+    return saved && DOMAINS.includes(saved) ? saved : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+
+export function saveDomain(domain: Domain): void {
+  try {
+    localStorage.setItem(DOMAIN_KEY, domain)
   } catch {
     // ignore
   }
