@@ -45,8 +45,9 @@ npm run dev                     # http://localhost:5173
    **Computer** if their voice comes from your computer's audio. Then **Start mic**:
    - desktop agent running: **Start** captures your mic and the computer's audio (the call);
    - no agent: **Mic only** transcribes just your side (the dialog says the agent is not running).
-3. The chat shows your speech on the left and the other side on the right, one bubble per sentence with
-   its own time.
+3. The chat shows your speech on the left and the other side on the right, one bubble per turn with
+   its own time: a bubble keeps growing while the person talks and ends after 3 s of silence
+   (`END_SILENCE_MS`), or as soon as the other side starts talking.
    The ✎ next to a name in the call header renames that speaker for the whole call (e.g. **Computer** to
    the caller's real name): earlier lines, new lines, the saved transcript and the summary.
 4. **Transcript** downloads the call as text, one line per sentence:

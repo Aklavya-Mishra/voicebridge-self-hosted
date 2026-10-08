@@ -11,6 +11,8 @@
   --theirs-bg: #ffffff;
   --theirs-text: #1b1d2e;
   --danger: #b42318;
+  --danger-text: #ffffff;
+  --control-border: #7c809a; /* inputs and buttons: 3:1 against the page (WCAG 1.4.11) */
   --warn: #b54708;
   --shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
   color-scheme: light;
@@ -32,6 +34,8 @@
     --theirs-bg: #20233a;
     --theirs-text: #e8e9f3;
     --danger: #f97066;
+    --danger-text: #2b0a06;
+    --control-border: #6f7493;
     --warn: #fdb022;
     --shadow: none;
     color-scheme: dark;
@@ -58,7 +62,7 @@ button,
 a.button {
   display: inline-block;
   text-decoration: none;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   background: var(--surface);
   color: var(--text);
   padding: 0.55rem 1rem;
@@ -78,7 +82,7 @@ button.primary {
 button.danger {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--danger-text);
   font-weight: 600;
 }
 button.link {
@@ -92,7 +96,7 @@ input:not([type='radio']):not([type='file']),
 select {
   width: 100%;
   padding: 0.55rem 0.7rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--bg);
   color: var(--text);
@@ -420,7 +424,7 @@ main.wide {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #fff;
+  background: currentColor;
   margin-right: 0.3rem;
   animation: pulse 1.2s infinite;
 }
