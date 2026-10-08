@@ -233,12 +233,6 @@ class DeepgramParticipantStream:
                 self._clock_base_ts = ts - self._fed
             self._buffer += pcm
             self._fed += len(pcm) / 2 / self._sample_rate
-            if (
-                self._parts
-                and not self._interim
-                and self._fed - self._last_word >= self._bubble_gap_s
-            ):
-                await self._finish_sentence()  # silent long enough: the bubble is done
             if self._conn is not None and not self._dropped:
                 try:
                     await self._conn.send(pcm)
@@ -349,11 +343,16 @@ class DeepgramParticipantStream:
         words = [w for w in all_words if w[0] >= self._floor]
         text = alternative.get("transcript", "").strip() if len(words) == len(all_words) else _words_text(words)
         part = (words, text) if words and text else None
+        # Silence is measured on Deepgram's clock (audio it has answered for), not on the audio sent:
+        # Deepgram answers 2-3 s late, so words after a short pause may simply not be back yet.
+        heard_until = self._conn_offset + message["start"] + message["duration"]
         if not message.get("is_final"):
             self._interim = [part] if part else []
             if part:
                 await self._start_sentence(words[0][0])
                 await self._emit(self._partial_payload())
+            else:
+                await self._end_if_silent(heard_until)
             return
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -366,9 +365,16 @@ class DeepgramParticipantStream:
             self._parts.append(part)
             self._last_word = part[0][-1][1]
         self._interim = []
-        self._confirm(self._conn_offset + message["start"] + message["duration"])
+        self._confirm(heard_until)
         if part:
             await self._emit(self._partial_payload())
+        else:
+            await self._end_if_silent(heard_until)
+
+    async def _end_if_silent(self, heard_until: float) -> None:
+        """Deepgram heard nothing from the last word up to `heard_until`: a long enough silence ends the bubble."""
+        if self._parts and not self._interim and heard_until - self._last_word >= self._bubble_gap_s:
+            await self._finish_sentence()
 
     async def _start_sentence(self, first_word: float) -> None:
         if self._utterance_id is not None:

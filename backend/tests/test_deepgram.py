@@ -190,16 +190,36 @@ async def test_short_pauses_stay_in_one_bubble():
     assert [u.text for u in stored] == ["hello world"]
 
 
+async def test_late_deepgram_results_do_not_split_a_short_pause():
+    """Seen live: Deepgram answers 2-3 s behind the audio sent. A 1.5 s pause must not look like 3 s just
+    because the next words have not come back yet."""
+    async def script(ws, received):
+        if received == 1.0:
+            await ws.send(results("hello", 0.0, 1.0, is_final=True, speech_final=True))
+        elif received == 4.5:  # "world" was spoken at 2.5 s; Deepgram reports it late
+            await ws.send(results("world", 2.5, 1.0, is_final=True, speech_final=True))
+
+    async with FakeDeepgram(script) as server:
+        stream, emitted, stored, *_ = build(server.url)
+        await feed(stream, tone(1.0) + silence(1.5) + tone(1.0) + silence(1.5))
+        await stream.close()
+
+    assert [u.text for u in stored] == ["hello world"]
+
+
 async def test_three_seconds_of_silence_ends_the_bubble():
     async def script(ws, received):
         if received == 1.0:
             await ws.send(results("hello", 0.0, 1.0, is_final=True, speech_final=True))
+        elif received == 4.5:  # Deepgram reports the silence it processed (an empty result)
+            await ws.send(results("", 1.0, 3.5, is_final=True))
         elif received == 5.5:
             await ws.send(results("again", 5.0, 0.5, is_final=True, speech_final=True))
 
     async with FakeDeepgram(script) as server:
         stream, emitted, stored, *_ = build(server.url)
         await feed(stream, tone(1.0) + silence(3.5))
+        await asyncio.sleep(0.1)  # the reply to the last chunk
         assert [u.text for u in stored] == ["hello"]  # stored once 3 s passed, before the next words
         await feed(stream, tone(1.0), start_ts=T0 + 4.5)
         await stream.close()
