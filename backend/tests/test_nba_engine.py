@@ -154,3 +154,9 @@ async def test_placeholder_fact_values_are_dropped():
     facts = [{"key": "account_id", "value": "xxx"}, {"key": "customer_name", "value": "XX"}, {"key": "plan", "value": "-"}]
     result = await run_turn(state, LINES, FakeLLM(answer(facts=facts)), SETTINGS)
     assert state.facts == {} and not result.facts_changed
+
+
+async def test_sensitive_values_in_fact_keys_are_masked():
+    state = NbaState(domain="telecom")
+    await run_turn(state, LINES, FakeLLM(answer(facts=[{"key": "card 4111 1111 1111 1111", "value": "visa"}])), SETTINGS)
+    assert not any(c.isdigit() for key in state.facts for c in key)

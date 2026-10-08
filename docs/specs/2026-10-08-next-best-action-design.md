@@ -104,6 +104,9 @@ packs, known `priority`/`when` values). A broken pack stops the backend with a c
   speaker role.
 - `match_fact_rules(pack, facts, customer_turns, fired) -> list[Hint]`.
 - Each rule fires at most once per call (`fired` = rule ids already used).
+- While the domain is auto and not yet detected, phrase rules from all packs apply (ids are unique), so
+  rule hints work even when the model is down; fact rules need a known domain.
+- A phrase must line up with whole words of the line ("it's working since" does not match "not working since").
 
 **`app/nba/engine.py`** — one turn:
 

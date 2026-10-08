@@ -97,3 +97,22 @@ async def test_set_domain_over_the_socket(nba_server):
     assert await client.call("set_domain", {"code": code, "domain": "cooking"}) == {"ok": False, "error": "Unknown call type"}
     assert (await client.call("set_domain", {"code": "ZZZZZZ", "domain": "sales"}))["ok"] is False
     await client.disconnect()
+
+
+async def test_a_failing_hint_service_does_not_stop_transcription(nba_server, monkeypatch):
+    from app.nba.service import NbaService
+
+    async def boom(self, code, utterance):
+        raise RuntimeError("hint service bug")
+
+    monkeypatch.setattr(NbaService, "on_final", boom)
+    base, _ = nba_server
+    client, code, h, events = await start_call(base, "telecom")
+    for chunk in chunks(stereo(silence(2.0), tone(1.0) + silence(1.0)), chunk_s=0.05):
+        await client.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+    await client.emit("stop_audio", {"code": code})
+    assert await wait_for(lambda: any(n == "transcript" and d["final"] and d["text"] for n, d in events))
+    async with httpx.AsyncClient(base_url=base) as c:
+        saved = (await c.get(f"/api/sessions/{code}", headers=h)).json()["session"]
+    assert [u["text"] for u in saved["transcript"]] == ["I want to cancel my plan"]
+    await client.disconnect()

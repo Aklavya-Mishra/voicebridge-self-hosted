@@ -35,11 +35,14 @@ class NbaService:
             return
         state = self._state(code)
         pack = PACKS.get(state.active_domain or "")
-        if pack:
-            fired = state.fired()
-            await self._add_rule_hints(
-                code, state, match_phrase_rules(pack, utterance.text, "customer", fired, self._settings.nba_phrase_match)
-            )
+        # While auto has not found the call type, every pack's phrases apply (rule ids are unique across
+        # packs), so rule hints work even when the model is down.
+        packs = [pack] if pack else list(PACKS.values())
+        fired = state.fired()
+        hints = []
+        for p in packs:
+            hints += match_phrase_rules(p, utterance.text, "customer", fired, self._settings.nba_phrase_match)
+        await self._add_rule_hints(code, state, hints)
         self._worker(code).submit()
 
     async def set_domain(self, code: str, domain: str) -> None:
@@ -93,9 +96,16 @@ class NbaService:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 await self._status(code, "unavailable", f"model not installed: ollama pull {self._settings.nba_model}")
-                return
-            logger.exception("Next-best-action turn failed for session %s", code)
-            await self._status(code, "idle")
+            else:
+                logger.warning("Live hint model error for session %s: %s", code, exc)
+                await self._status(code, "unavailable", f"local model error (HTTP {exc.response.status_code})")
+            return
+        except TimeoutError:
+            await self._status(code, "unavailable", f"model too slow (over {self._settings.nba_timeout_s:g} s)")
+            return
+        except httpx.TransportError as exc:  # Ollama stopped mid-request
+            logger.warning("Live hint model unreachable for session %s: %s", code, exc)
+            await self._status(code, "unavailable", "local model stopped responding")
             return
         except Exception:
             logger.exception("Next-best-action turn failed for session %s", code)

@@ -29,7 +29,18 @@ def _hint(rule, ts: float | None) -> dict:
 def _says(line: str, phrase: str, threshold: int) -> bool:
     phrase = normalize(phrase)
     # A line shorter than the phrase cannot contain it ("No." must not match "no signal").
-    return bool(phrase) and len(line) >= len(phrase) and fuzz.partial_ratio(phrase, line) >= threshold
+    if not phrase or len(line) < len(phrase):
+        return False
+    match = fuzz.partial_ratio_alignment(phrase, line, score_cutoff=threshold)
+    if match is None:
+        return False
+    # The matched part must start and end on whole words: "it s working since y" is not "not working since".
+    start, end = match.dest_start, match.dest_end
+    while start < end and line[start] == " ":
+        start += 1
+    while end > start and line[end - 1] == " ":
+        end -= 1
+    return (start == 0 or line[start - 1] == " ") and (end == len(line) or line[end] == " ")
 
 
 def match_phrase_rules(

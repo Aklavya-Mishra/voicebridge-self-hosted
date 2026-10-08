@@ -62,3 +62,12 @@ def test_absent_waits_for_enough_customer_lines():
 def test_blank_fact_counts_as_absent_and_fired_rules_skip():
     assert ids(match_fact_rules(PACK, {"account_id": "  "}, 4, set(), 4)) == ["f-account"]
     assert match_fact_rules(PACK, {}, 9, {"f-account"}, 4) == []
+
+
+def test_phrase_must_line_up_with_whole_words():
+    """Seen in review: 'it's working since yesterday' scored 88 against 'not working since' (the opposite)."""
+    pack = parse_pack(minimal(phrase_rules=[
+        {"id": "p-down", "speaker": "customer", "phrases": ["not working since"], "hint": "h", "priority": "alert"}
+    ]))
+    assert match_phrase_rules(pack, "it's working since yesterday", "customer", set(), 88) == []
+    assert ids(match_phrase_rules(pack, "it is not working since monday", "customer", set(), 88)) == ["p-down"]

@@ -130,7 +130,7 @@ def merge_facts(facts: dict[str, str], items) -> bool:
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
             continue
-        key = re.sub(r"\W+", "_", str(item.get("key") or "").strip().lower()).strip("_")[:MAX_FACT_KEY]
+        key = re.sub(r"\W+", "_", mask_text(str(item.get("key") or "")).strip().lower()).strip("_")[:MAX_FACT_KEY]
         value = _clean(item.get("value"))[:MAX_FACT_VALUE]
         if not key or value.lower() in EMPTY_VALUES or _PLACEHOLDER.match(value):
             continue

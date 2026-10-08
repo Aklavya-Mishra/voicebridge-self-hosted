@@ -269,7 +269,10 @@ class SocketHandlers:
                 utterance.text = mask_text(utterance.text)
             self._store.add_utterance(code, utterance)
             if self._nba is not None:
-                await self._nba.on_final(code, utterance)
+                try:
+                    await self._nba.on_final(code, utterance)
+                except Exception:  # a hint problem must never stop transcription
+                    logger.exception("Live hints failed for session %s", code)
 
         async def notify(payload: dict) -> None:
             await self._sio.emit("stt_status", payload, room=room_for(code))

@@ -96,11 +96,11 @@ async def test_unreadable_model_answer_is_skipped():
 async def test_auto_detection_emits_the_domain_and_then_rules_apply():
     service, store, code, events = make(FakeLLM(answer(intent="general")), domain="auto")
     await service.on_final(code, say(store, code, "a", "I want to cancel my plan"))
-    assert named(events, "nba_hint") == []  # no rules until the domain is known
+    assert [h["id"] for h in named(events, "nba_hint")] == ["tel-cancel"]  # all packs' phrases while detecting
     await service.drain(code)
     assert named(events, "nba_domain") == [{"code": code, "domain": "telecom", "auto": True}]
-    await service.on_final(code, say(store, code, "b", "seriously, I will switch provider"))
-    assert named(events, "nba_hint")[-1]["id"] == "tel-cancel"
+    await service.on_final(code, say(store, code, "b", "there is no signal at home"))
+    assert named(events, "nba_hint")[-1]["id"] == "tel-no-signal"
     await service.drain(code)
     assert store.get(code).nba["detected"] == "telecom"
 
@@ -153,3 +153,39 @@ async def test_rename_during_call_is_kept_when_hints_are_saved_later():
     await service.drain(code)
     texts = [h["text"] for h in store.get(code).nba["hints"] if h["kind"] == "ai"]
     assert texts == ["Ask Rahul which area.", "Offer a technician visit."]
+
+
+class DownLLM:
+    name = "ollama"
+
+    async def json(self, *args):
+        raise httpx.ConnectError("refused")
+
+
+async def test_auto_mode_still_gives_rule_hints_when_the_model_is_down():
+    service, store, code, events = make(DownLLM(), domain="auto")
+    await service.on_final(code, say(store, code, "a", "I want to cancel my plan"))
+    await service.drain(code)
+    assert [h["id"] for h in named(events, "nba_hint")] == ["tel-cancel"]
+
+
+async def test_model_server_error_is_reported():
+    class BrokenLLM:
+        name = "ollama"
+
+        async def json(self, *args):
+            request = httpx.Request("POST", "http://127.0.0.1:11434/api/chat")
+            raise httpx.HTTPStatusError("500", request=request, response=httpx.Response(500, request=request))
+
+    service, store, code, events = make(BrokenLLM())
+    await service.on_final(code, say(store, code, "a", "hello"))
+    await service.drain(code)
+    assert named(events, "nba_status")[-1] == {"code": code, "state": "unavailable", "reason": "local model error (HTTP 500)"}
+
+
+async def test_slow_model_is_reported():
+    service, store, code, events = make(FakeLLM(answer(), delay=5))
+    service._settings = Settings(nba_enabled=True, nba_timeout_s=0.05)
+    await service.on_final(code, say(store, code, "a", "hello"))
+    await service.drain(code)
+    assert named(events, "nba_status")[-1] == {"code": code, "state": "unavailable", "reason": "model too slow (over 0.05 s)"}
