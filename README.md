@@ -81,6 +81,28 @@ tried:
 The backend log names the order at start (`Call analysis with: ollama`). `CALL_ANALYSIS=false` turns the
 summaries off; `PII_MASKING=false` turns masking off.
 
+### Live hints (next best action)
+
+During a call, an **Assist** panel next to the chat suggests what to say or ask next, after each line from
+the other person (the call audio, "Computer" until renamed), and fills a **Customer info** card with what
+they said (plan, device, budget, issue...). Hints are newest first; the latest is highlighted, `rule` marks
+an instant hint from a rule, and alerts (cancellation, price objection, escalation...) have an orange edge.
+Hints and Customer info are saved with the call and shown again under its summary in **Past calls**.
+
+- **Call type**: pick Sales, Marketing, Telecom or Tech support when you start a session, or leave **Auto**
+  to detect it from the first lines. It can be changed from the panel at any time. Auto can mislabel close
+  types (a CRM sales call was detected as marketing in testing), so pick the type when you know it.
+- Only the other person's lines trigger hints; calls between two VoiceBridge users get none.
+- Each call type is one JSON file in `backend/app/nba/knowledge/`: intents with guidance for the advisor,
+  facts to collect, and rules (phrases said, facts present, missing or equal to a value). Edit them to tune
+  the hints; the backend checks them at start.
+- Model: local `qwen2.5:7b` through Ollama on the CPU (`NBA_MODEL`), free, nothing leaves the PC; cloud keys
+  are never used for hints. Measured on this PC: about 6-7 s per hint once a call is under way, about 11 s
+  for the first hint after the call type is known; rule hints are instant. `python tools/bench_nba.py
+  <model>` (in `backend/`) times a model on two sample calls.
+- When Ollama is not running (or the model is not pulled), the panel says so and rule hints keep working.
+  `NBA_ENABLED=false` turns live hints off.
+
 ### Desktop agent (Windows)
 
 Install: on the web app's home page click **Download agent (.exe)** and run it once. A notification says it

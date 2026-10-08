@@ -29,9 +29,10 @@ SYSTEM_PROMPT = (
     "Reply with JSON following the schema:\n"
     "- domain: {domain_rule}\n"
     "- intent: the customer's current need, one of the listed intents.\n"
-    "- facts: details the customer stated about themselves or their situation, each a short value of a few "
-    "words. Use a listed fact key when one fits, otherwise a short snake_case key. Only what was said; skip "
-    "values shown as xxxxx.\n"
+    "- facts: only facts that are new or changed in the latest lines (the known facts are kept for you): "
+    "details the customer stated about themselves or their situation, each value at most 5 words. Use a listed "
+    "fact key when one fits, otherwise a short snake_case key. Only what was actually said; never copy a fact's "
+    "description as its value; skip values shown as xxxxx. Use [] when nothing new was said.\n"
     "- hint: one short sentence for the advisor, under 25 words: the best next question to ask or thing to say, "
     "about the customer's latest line, in the language of the conversation. Do not repeat an earlier hint. "
     "Never invent prices, offers, policies or account details. Use an empty string if no hint would help now."
@@ -95,20 +96,26 @@ def _schema(pack: Pack | None) -> dict:
 
 
 def build_prompt(state: NbaState, lines: list[Line], pack: Pack | None) -> tuple[str, str, dict]:
-    parts = []
+    """System prompt: instructions plus the call type's fixed knowledge, identical on every turn of a call so
+    Ollama reuses it from its cache (much faster on CPU). User prompt: what changes, facts, hints, lines."""
+    knowledge = []
     if pack is None:
-        parts.append("Domains:\n" + "\n".join(f"- {p.domain}: {p.description}" for p in PACKS.values()))
-        parts.append("Intents:\n- general: any customer need (the domain is not known yet).")
+        knowledge.append("Domains:\n" + "\n".join(f"- {p.domain}: {p.description}" for p in PACKS.values()))
+        knowledge.append("Intents:\n- general: any customer need (the domain is not known yet).")
     else:
-        parts.append(f"Domain: {pack.label}. {pack.description}")
-        parts.append("Intents:\n" + "\n".join(f"- {i.name}: {i.description} Guidance: {i.guidance}" for i in pack.intents))
-        parts.append("Facts to collect:\n" + "\n".join(f"- {f.key}: {f.description}" for f in pack.facts))
-    parts.append("Known facts:\n" + ("\n".join(f"- {k}: {v}" for k, v in state.facts.items()) or "- none yet"))
+        knowledge.append(f"Domain: {pack.label}. {pack.description}")
+        knowledge.append(
+            "Intents:\n" + "\n".join(f"- {i.name}: {i.description} Guidance: {i.guidance}" for i in pack.intents)
+        )
+        knowledge.append("Facts to collect:\n" + "\n".join(f"- {f.key}: {f.description}" for f in pack.facts))
+    rule = FIXED_DOMAIN_RULE.format(domain=pack.domain) if pack else AUTO_DOMAIN_RULE
+    system = SYSTEM_PROMPT.format(domain_rule=rule) + "\n\n" + "\n\n".join(knowledge)
+
+    parts = ["Known facts:\n" + ("\n".join(f"- {k}: {v}" for k, v in state.facts.items()) or "- none yet")]
     earlier = "\n".join(f"- {h['text']}" for h in state.hints[-HINTS_IN_PROMPT:])
     parts.append("Earlier hints (do not repeat):\n" + (earlier or "- none yet"))
     parts.append("Conversation (latest line last):\n" + "\n".join(f"{l.role} ({l.name}): {l.text}" for l in lines))
-    rule = FIXED_DOMAIN_RULE.format(domain=pack.domain) if pack else AUTO_DOMAIN_RULE
-    return SYSTEM_PROMPT.format(domain_rule=rule), "\n\n".join(parts), _schema(pack)
+    return system, "\n\n".join(parts), _schema(pack)
 
 
 def _clean(value) -> str:

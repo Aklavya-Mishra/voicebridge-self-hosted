@@ -1,7 +1,7 @@
 {
   "domain": "sales",
   "label": "Sales",
-  "description": "Selling a product or service to a prospect or an existing customer: needs, product questions, pricing, objections and closing.",
+  "description": "Selling to a prospect or customer on this call: their needs, the product, pricing, objections, competitors and closing the deal. The advisor is pitching a product or service.",
   "intents": [
     {"name": "discovery", "description": "The customer describes their needs, their current setup or what they are looking for.", "guidance": "Ask one open question about the problem behind the request, who decides and by when. Do not pitch yet.", "priority": "suggestion"},
     {"name": "product_question", "description": "The customer asks how the product works or whether it supports something.", "guidance": "Answer only from what was said on the call; if unsure, offer to confirm instead of guessing. Link the answer to the need they gave.", "priority": "suggestion"},

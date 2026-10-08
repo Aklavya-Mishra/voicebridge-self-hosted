@@ -39,7 +39,7 @@ def answer(**over) -> dict:
 def test_auto_prompt_lists_domains_and_only_the_general_intent():
     system, user, schema = build_prompt(NbaState(), LINES, None)
     for domain in PACKS:
-        assert f"- {domain}:" in user
+        assert f"- {domain}:" in system  # fixed text in the system prompt: Ollama reuses it between turns
     assert schema["properties"]["domain"]["enum"] == [*PACKS, "unknown"]
     assert schema["properties"]["intent"]["enum"] == ["general"]
     assert "customer (Computer): My internet is down since yesterday." in user
@@ -49,10 +49,17 @@ def test_auto_prompt_lists_domains_and_only_the_general_intent():
 def test_domain_prompt_lists_the_packs_intents_facts_and_what_is_known():
     hint = {"id": "h1", "text": "Ask the area.", "kind": "ai", "intent": None, "priority": "suggestion", "ts": 1.0}
     state = NbaState(domain="telecom", facts={"location": "Pune"}, hints=[hint])
-    _, user, schema = build_prompt(state, LINES, PACKS["telecom"])
+    system, user, schema = build_prompt(state, LINES, PACKS["telecom"])
     assert schema["properties"]["domain"]["enum"] == ["telecom"]
     assert "network_issue" in schema["properties"]["intent"]["enum"]
-    assert "- location: Pune" in user and "- Ask the area." in user and "- current_plan:" in user
+    assert "- current_plan:" in system and "Guidance:" in system
+    assert "- location: Pune" in user and "- Ask the area." in user and "Guidance:" not in user
+
+
+def test_system_prompt_stays_the_same_across_turns_of_a_call():
+    a, _, _ = build_prompt(NbaState(domain="telecom"), LINES[:1], PACKS["telecom"])
+    b, _, _ = build_prompt(NbaState(domain="telecom", facts={"x": "y"}), LINES, PACKS["telecom"])
+    assert a == b
 
 
 async def test_auto_mode_locks_the_first_detected_domain():
@@ -133,3 +140,9 @@ async def test_non_object_reply_raises():
 async def test_slow_model_times_out():
     with pytest.raises(TimeoutError):
         await run_turn(NbaState(), LINES, FakeLLM(answer(), delay=5), Settings(nba_timeout_s=0.05))
+
+
+def test_model_is_asked_only_for_new_facts():
+    """Facts merge into the known ones, so the model need not repeat them: fewer tokens, faster on CPU."""
+    system, _, _ = build_prompt(NbaState(), LINES, None)
+    assert "only facts that are new or changed" in system

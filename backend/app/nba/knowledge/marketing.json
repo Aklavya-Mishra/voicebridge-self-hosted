@@ -1,7 +1,7 @@
 {
   "domain": "marketing",
   "label": "Marketing",
-  "description": "Marketing calls: lead follow-ups, campaign or offer enquiries, event and webinar invitations, surveys and advertising enquiries.",
+  "description": "Promoting rather than closing a sale: campaign or offer enquiries, follow-ups on downloaded content or sign-ups, event and webinar invitations, surveys, advertising enquiries.",
   "intents": [
     {"name": "lead_follow_up", "description": "Following up with someone who downloaded content, signed up or showed interest.", "guidance": "Remind them what they showed interest in, ask what prompted it, and qualify the need with one question.", "priority": "suggestion"},
     {"name": "campaign_inquiry", "description": "The customer asks about an offer, promotion or campaign they saw.", "guidance": "Ask where they saw it and explain the offer only as it was stated; ask which part interests them.", "priority": "suggestion"},
