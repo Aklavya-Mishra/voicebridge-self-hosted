@@ -15,7 +15,7 @@ HINT = {"id": "h1", "text": "Ask Computer for the area.", "kind": "ai", "intent"
 
 def test_new_calls_default_to_auto_with_nothing_saved():
     s = SessionStore().create(ME)
-    assert s.domain == "auto" and s.nba == {"hints": [], "facts": {}, "detected": None}
+    assert s.domain == "auto" and s.nba == {"hints": [], "facts": {}, "detected": None, "fact_log": {}}
     assert s.to_dict()["domain"] == "auto" and s.to_dict()["nba"] == s.nba
 
 
@@ -30,7 +30,7 @@ def test_domain_and_hints_survive_a_restart(tmp_path):
     nba = {"hints": [HINT], "facts": {"issue": "no internet"}, "detected": None}
     store.set_nba(s.code, nba)
     again = SessionStore(db_path=db).get(s.code)
-    assert again.domain == "telecom" and again.nba == nba
+    assert again.domain == "telecom" and again.nba == {**nba, "fact_log": {}}
     store.set_domain(s.code, "sales")
     assert SessionStore(db_path=db).get(s.code).domain == "sales"
 
@@ -45,7 +45,7 @@ def test_database_from_before_hints_loads_as_auto(tmp_path):
     )
     conn.close()
     s = SessionStore(db_path=str(db)).get("ABC234")
-    assert s.domain == "auto" and s.nba == {"hints": [], "facts": {}, "detected": None}
+    assert s.domain == "auto" and s.nba == {"hints": [], "facts": {}, "detected": None, "fact_log": {}}
 
 
 def test_renaming_the_caller_updates_saved_hints_in_place():
@@ -80,3 +80,14 @@ async def test_health_says_whether_hints_are_on(settings):
         app = create_app(replace(settings, nba_enabled=enabled), stt=RecordingSTT())
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
             assert (await c.get("/api/health")).json()["nba"] is enabled
+
+
+def test_fact_history_survives_a_restart_and_follows_renames(tmp_path):
+    db = str(tmp_path / "vb.db")
+    store = SessionStore(db_path=db)
+    s = store.create(ME)
+    store.add_utterance(s.code, Utterance("a", "u1-call", "Computer", "Hello", 1.0, 2.0))
+    store.set_nba(s.code, {"hints": [], "facts": {}, "detected": None, "fact_log": {"contact": ["Computer"]}})
+    store.rename_speaker(s.code, "u1-call", "Rahul")
+    assert SessionStore(db_path=db).get(s.code).nba["fact_log"] == {"contact": ["Rahul"]}
+    assert SessionStore().create(ME).nba["fact_log"] == {}

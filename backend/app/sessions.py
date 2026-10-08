@@ -55,7 +55,7 @@ def is_call_speaker(speaker_id: str) -> bool:
 
 def empty_nba() -> dict:
     """Live hint state of a call (app.nba): hints shown, customer facts, domain found in auto mode."""
-    return {"hints": [], "facts": {}, "detected": None}
+    return {"hints": [], "facts": {}, "detected": None, "fact_log": {}}
 
 
 @dataclass
@@ -314,6 +314,8 @@ class SessionStore:
             facts = session.nba["facts"]
             for key, value in facts.items():
                 facts[key] = _replace_name(value, old, name)
+            for values in session.nba.setdefault("fact_log", {}).values():
+                values[:] = [_replace_name(v, old, name) for v in values]
         self._save(session)
         return old
 

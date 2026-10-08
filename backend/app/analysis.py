@@ -16,6 +16,7 @@ from app.sessions import SessionStore
 logger = logging.getLogger("voicebridge")
 
 MASK = "xxxxx"
+SENTIMENTS = {"positive", "neutral", "negative", "mixed"}
 # 7+ digits, optionally separated by single spaces or dashes: card, phone, account and ID numbers.
 # Shorter numbers (prices, times, years, flight numbers) are left alone.
 _LONG_NUMBER = re.compile(r"\+?\d(?:[ \-]?\d){6,}")
@@ -41,12 +42,14 @@ ANALYSIS_SCHEMA = {
         "action_items": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Only explicit commitments or agreed follow-up tasks from the conversation. "
-            "Do not invent recommendations or tasks from a mentioned problem. Empty if none were established",
+            "description": "Next steps: what either person said they will do or agreed to do, such as sending "
+            "details, a follow-up call or meeting, or a task, each as 'Who will do what (by when)', e.g. 'Aklavya will "
+            "email the details' or 'Follow-up next Wednesday'. Do not invent recommendations or tasks from a "
+            "mentioned problem. Empty if none were said",
         },
         "outcome": {
             "type": "string",
-            "description": "An explicitly supported result or decision, one sentence. Use 'No clear outcome' if none was established",
+            "description": "What was decided or agreed, as one sentence (e.g. who will do what next); never a sentiment word such as positive or neutral. Use 'No clear outcome' if none was established",
         },
         "sentiment": {
             "type": "string",
@@ -74,7 +77,8 @@ SYSTEM_PROMPT = (
     "unless the transcript explicitly discusses software. For example, discussing stretching one's body and "
     "singing ability describes human activities, not a stretching feature or singing function. "
     "Summarise only what the transcript supports. Do not invent explanations, diagnoses, resolutions or follow-up work. "
-    "Action items must be explicit commitments or agreed tasks; otherwise return an empty array. "
+    "Action items are the next steps: every commitment or agreed task said by either person (sending something, "
+    "a follow-up, a meeting), with who and when if said; otherwise return an empty array. "
     "Use 'Purpose unclear' or 'No clear outcome' when appropriate instead of filling gaps. "
     "Assess the expressed emotional tone; merely mentioning a problem or inability does not establish negative sentiment. "
     "Use neutral when the emotional evidence is insufficient. "
@@ -147,6 +151,8 @@ async def analyse_session(store: SessionStore, code: str, llm: LlmChain) -> None
         return apply_pii(mask_text(str(text or "")), pii, keep)
 
     summary = {k: clean(result.get(k)) for k in ("summary", "purpose", "outcome")}
+    if summary["outcome"].strip(" .!").lower() in SENTIMENTS:  # a mood, not an outcome
+        summary["outcome"] = "No clear outcome"
     summary["sentiment"] = result.get("sentiment")
     summary["action_items"] = [
         clean(a) for a in result.get("action_items") or [] if a and str(a).strip().lower() not in ("none", "n/a")

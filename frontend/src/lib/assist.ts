@@ -1,4 +1,4 @@
-import type { Domain, NbaHint } from './types'
+import type { Domain, NbaData, NbaHint } from './types'
 
 export const DOMAIN_OPTIONS: { value: Domain; label: string }[] = [
   { value: 'auto', label: 'Auto (detect)' },
@@ -29,4 +29,14 @@ export const factLabel = (key: string): string => {
   if (key.length <= 3) return key.toUpperCase()
   const words = key.replace(/_/g, ' ').trim()
   return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** Customer info for the call record: every value a fact had during the call, so nothing shown is lost. */
+export const savedFacts = (nba: NbaData): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const key of new Set([...Object.keys(nba.fact_log ?? {}), ...Object.keys(nba.facts)])) {
+    const values = nba.fact_log?.[key]?.length ? nba.fact_log[key] : [nba.facts[key]]
+    out[key] = values.filter(Boolean).join('; ')
+  }
+  return out
 }

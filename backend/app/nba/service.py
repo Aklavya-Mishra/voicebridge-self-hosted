@@ -69,6 +69,7 @@ class NbaService:
                 domain=session.domain,
                 detected=session.nba.get("detected"),
                 facts=session.nba["facts"],
+                fact_log=session.nba.setdefault("fact_log", {}),
                 hints=session.nba["hints"],
             )
             self._states[code] = state
@@ -138,7 +139,10 @@ class NbaService:
             self._save(code, state)
 
     def _save(self, code: str, state: NbaState) -> None:
-        self._store.set_nba(code, {"hints": state.hints, "facts": state.facts, "detected": state.detected})
+        self._store.set_nba(
+            code,
+            {"hints": state.hints, "facts": state.facts, "detected": state.detected, "fact_log": state.fact_log},
+        )
 
     async def _emit_domain(self, code: str, state: NbaState) -> None:
         await self._emit(code, "nba_domain", {"code": code, "domain": state.active_domain, "auto": state.domain == "auto"})

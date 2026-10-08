@@ -18,8 +18,10 @@ from app.nba.rules import normalize
 HINTS_IN_PROMPT = 5  # earlier hints shown to the model so it does not repeat them
 DEDUPE_WINDOW = 10  # a new hint is compared with this many earlier ones
 MAX_FACT_KEY = 40
-MAX_FACT_VALUE = 80
-EMPTY_VALUES = {"", "none", "null", "n/a", "unknown", MASK}
+MAX_FACT_VALUE = 160
+EMPTY_VALUES = {
+    "", "none", "null", "n/a", "unknown", "unspecified", "not specified", "not mentioned", "not provided", MASK,
+}
 # Placeholders a model writes for a value it does not know: "xxx", "XX", "-", "...", "?".
 _PLACEHOLDER = re.compile(r"^(?:x+|[\W_]+)$", re.IGNORECASE)
 
@@ -33,7 +35,7 @@ SYSTEM_PROMPT = (
     "- domain: {domain_rule}\n"
     "- intent: the customer's current need, one of the listed intents.\n"
     "- facts: only facts that are new or changed in the latest lines (the known facts are kept for you): "
-    "details the customer stated about themselves or their situation, each value at most 5 words. Use a listed "
+    "details the customer stated about themselves or their situation, each value short but complete: keep every number and range (e.g. '$10-$20/hour by role'). Use a listed "
     "fact key when one fits, otherwise a short snake_case key. Only what was actually said; never copy a fact's "
     "description as its value; skip values shown as xxxxx. Use [] when nothing new was said.\n"
     "- hint: one short sentence for the advisor, under 25 words: the best next question to ask or thing to say, "
@@ -60,6 +62,8 @@ class NbaState:
     detected: str | None = None
     facts: dict[str, str] = field(default_factory=dict)
     hints: list[dict] = field(default_factory=list)
+    # Every value each fact had during the call, in order: the call's record keeps them all.
+    fact_log: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def active_domain(self) -> str | None:
@@ -125,8 +129,8 @@ def _clean(value) -> str:
     return mask_text(" ".join(str(value).split()))
 
 
-def merge_facts(facts: dict[str, str], items) -> bool:
-    """Add or update facts from the model's list; returns whether anything changed."""
+def merge_facts(facts: dict[str, str], items, log: dict[str, list[str]] | None = None) -> bool:
+    """Add or update facts from the model's list (and every new value in `log`); returns whether anything changed."""
     changed = False
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
@@ -138,6 +142,8 @@ def merge_facts(facts: dict[str, str], items) -> bool:
         if facts.get(key) != value:
             facts[key] = value
             changed = True
+        if log is not None and value not in log.setdefault(key, []):
+            log[key].append(value)
     return changed
 
 
@@ -158,7 +164,7 @@ async def run_turn(state: NbaState, lines: list[Line], llm, settings: Settings) 
         state.detected = reply["domain"]
         pack = PACKS[state.detected]
         result.domain_changed = True
-    result.facts_changed = merge_facts(state.facts, reply.get("facts"))
+    result.facts_changed = merge_facts(state.facts, reply.get("facts"), state.fact_log)
 
     intent = next((i for i in pack.intents if i.name == reply.get("intent")), None) if pack else None
     text = _clean(reply.get("hint") or "")

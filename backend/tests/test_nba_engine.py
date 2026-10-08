@@ -165,3 +165,31 @@ async def test_sensitive_values_in_fact_keys_are_masked():
 def test_prompt_says_hints_and_facts_come_only_from_the_customer():
     system, _, _ = build_prompt(NbaState(), LINES, None)
     assert "only from the customer's lines" in system
+
+
+async def test_every_value_shown_for_a_fact_is_kept():
+    """Seen live: the budget range was overwritten by a later '$10' and lost after the call."""
+    state = NbaState(domain="sales")
+    await run_turn(state, LINES, FakeLLM(answer(facts=[{"key": "budget", "value": "$10-$20/hour by role"}])), SETTINGS)
+    await run_turn(state, LINES, FakeLLM(answer(facts=[{"key": "budget", "value": "$10/hour for engineers"}], hint="x y z")), SETTINGS)
+    await run_turn(state, LINES, FakeLLM(answer(facts=[{"key": "budget", "value": "$10/hour for engineers"}], hint="a b c")), SETTINGS)
+    assert state.facts == {"budget": "$10/hour for engineers"}  # the live panel shows the latest
+    assert state.fact_log == {"budget": ["$10-$20/hour by role", "$10/hour for engineers"]}
+
+
+async def test_long_fact_values_with_ranges_are_kept_whole():
+    value = "$10/h engineer, $15/h senior lead, $18/h manager, $20/h solution architect"
+    state = NbaState(domain="sales")
+    await run_turn(state, LINES, FakeLLM(answer(facts=[{"key": "budget", "value": value}])), SETTINGS)
+    assert state.facts["budget"] == value
+
+
+async def test_not_specified_is_not_a_fact():
+    state = NbaState(domain="sales")
+    await run_turn(state, LINES, FakeLLM(answer(facts=[{"key": "current_solution", "value": "not specified"}])), SETTINGS)
+    assert state.facts == {}
+
+
+def test_prompt_asks_to_keep_numbers_and_ranges():
+    system, _, _ = build_prompt(NbaState(), LINES, None)
+    assert "keep every number and range" in system and "at most 5 words" not in system

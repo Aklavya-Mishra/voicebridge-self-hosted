@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { addHint, domainText, factLabel, hintsNewestFirst, visibleHints } from '../src/lib/assist.ts'
+import { addHint, domainText, factLabel, hintsNewestFirst, savedFacts, visibleHints } from '../src/lib/assist.ts'
 import type { NbaHint } from '../src/lib/types.ts'
 
 const hint = (id: string, ts: number, text = `hint ${id}`): NbaHint => ({
@@ -48,5 +48,17 @@ test('the live panel shows at most the two newest hints', () => {
   assert.deepEqual(
     visibleHints([hint('c', 3), hint('b', 2), hint('a', 1)]).map((h) => h.id),
     ['c', 'b'],
+  )
+})
+
+test('the call record shows every value a fact had during the call', () => {
+  assert.deepEqual(
+    savedFacts({
+      hints: [],
+      detected: null,
+      facts: { budget: '$10/hour', timeline: 'six months' },
+      fact_log: { budget: ['$10-$20/hour by role', '$10/hour'] },
+    }),
+    { budget: '$10-$20/hour by role; $10/hour', timeline: 'six months' },
   )
 })

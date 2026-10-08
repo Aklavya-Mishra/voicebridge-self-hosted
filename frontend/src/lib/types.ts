@@ -109,6 +109,8 @@ export interface NbaData {
   hints: NbaHint[]
   facts: Record<string, string>
   detected: string | null
+  /** Every value each fact had during the call, in order. */
+  fact_log?: Record<string, string[]>
 }
 
 /** Server `nba_domain` event: the call type in use (null while auto has not detected one). */

@@ -280,3 +280,23 @@ async def test_ollama_model_and_context_can_be_overridden():
     await llm.json("s", "u", {"type": "object"})
     assert seen["model"] == "qwen2.5:3b"
     assert seen["options"]["num_ctx"] == 4096 and seen["options"]["num_gpu"] == 0
+
+
+async def test_a_sentiment_word_is_not_an_outcome(tmp_path):
+    """Seen live: qwen2.5 wrote outcome 'Positive' while the sentiment was neutral, and the screens disagreed."""
+    store, code = seeded_store(tmp_path)
+    await analyse_session(store, code, LlmChain([FakeLLM("ollama", result=dict(ANALYSIS, outcome="Positive."))]))
+    assert store.get(code).summary["outcome"] == "No clear outcome"
+
+
+def test_schema_says_the_outcome_is_a_sentence_not_a_sentiment():
+    assert "never a sentiment word" in ANALYSIS_SCHEMA["properties"]["outcome"]["description"]
+
+
+def test_next_steps_cover_promises_from_either_person():
+    """Seen live: 'I'll email the details' and 'follow-up by next Wednesday' gave no next steps."""
+    from app.analysis import SYSTEM_PROMPT
+
+    description = ANALYSIS_SCHEMA["properties"]["action_items"]["description"]
+    assert "either person" in description and "follow-up" in description
+    assert "either person" in SYSTEM_PROMPT

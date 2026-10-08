@@ -215,3 +215,14 @@ async def test_my_replies_after_the_caller_spoke_stay_in_context():
     await service.drain(code)
     user = llm.calls[-1][1]
     assert "advisor (Aklavya): Which area are you in?" in user and "customer (Computer): My internet is down." in user
+
+
+async def test_fact_history_is_saved_with_the_call():
+    llm = FakeLLM(answer(facts=[{"key": "budget", "value": "$10-$20/hour"}]))
+    service, store, code, _ = make(llm)
+    await service.on_final(code, say(store, code, "a", "my budget"))
+    await service.drain(code)
+    llm.result = answer(facts=[{"key": "budget", "value": "$10/hour"}], hint="Something different now.")
+    await service.on_final(code, say(store, code, "b", "that's ten"))
+    await service.drain(code)
+    assert store.get(code).nba["fact_log"] == {"budget": ["$10-$20/hour", "$10/hour"]}

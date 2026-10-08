@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { getSession } from '../lib/api'
-import { hintsNewestFirst } from '../lib/assist'
+import { savedFacts } from '../lib/assist'
 import { fromUtterance, type CallSummary, type Session } from '../lib/types'
-import { FactList, HintList } from './AssistPanel'
+import { FactList } from './AssistPanel'
 
 interface Props {
   code: string
@@ -45,12 +45,14 @@ export function TranscriptView({ code, token, onBack }: Props) {
       </div>
       {error && <p className="error">{error}</p>}
       {session && lines.length > 0 && <SummaryBlock summary={session.summary} />}
-      {session && session.nba && (session.nba.hints.length > 0 || Object.keys(session.nba.facts).length > 0) && (
-        <section className="summary-box" aria-label="Live hints">
+      {session && session.nba && Object.keys(savedFacts(session.nba)).length > 0 && (
+        <section className="summary-box" aria-label="Customer info">
+          {/* Hints during the call are hidden for now; restore these two lines to show them again.
           <h3>Hints during the call</h3>
           <HintList hints={hintsNewestFirst(session.nba.hints)} />
+          */}
           <h3>Customer info</h3>
-          <FactList facts={session.nba.facts} />
+          <FactList facts={savedFacts(session.nba)} />
         </section>
       )}
       {session && lines.length === 0 && <p className="muted">This call has no transcript.</p>}
@@ -70,7 +72,7 @@ function SummaryBlock({ summary }: { summary: CallSummary | null }) {
   return (
     <section className="summary-box" aria-label="Call summary">
       <div className="summary-tags">
-        <span className={`pill sentiment-${summary.sentiment}`}>{summary.sentiment}</span>
+        <span className={`pill sentiment-${summary.sentiment}`}>Sentiment: {summary.sentiment}</span>
       </div>
       <p>{summary.summary}</p>
       <dl>
@@ -78,18 +80,18 @@ function SummaryBlock({ summary }: { summary: CallSummary | null }) {
         <dd>{summary.purpose}</dd>
         <dt>Outcome</dt>
         <dd>{summary.outcome}</dd>
-        {summary.action_items.length > 0 && (
-          <>
-            <dt>Action items</dt>
-            <dd>
-              <ul>
-                {summary.action_items.map((item, i) => (
-                  <li key={i}>{item}</li>
-                ))}
-              </ul>
-            </dd>
-          </>
-        )}
+        <dt>Next steps</dt>
+        <dd>
+          {summary.action_items.length > 0 ? (
+            <ul>
+              {summary.action_items.map((item, i) => (
+                <li key={i}>{item}</li>
+              ))}
+            </ul>
+          ) : (
+            'None agreed'
+          )}
+        </dd>
       </dl>
     </section>
   )
