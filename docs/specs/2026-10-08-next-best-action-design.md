@@ -34,7 +34,7 @@ Success criteria:
 | Domain choice | Dropdown at session start: Auto (default), Sales, Marketing, Telecom, Tech support. Auto must be removable later without backend changes. |
 | Panel content | Hints + Customer info card. |
 | Pipeline | One combined LLM call per turn (domain when auto, intent, facts, hint), after instant rule checks. |
-| Trigger | Only a final sentence from a call-audio (customer) speaker starts a turn. Advisor lines are context only. |
+| Trigger | Only a final sentence from a call-audio (customer) speaker starts a turn. Advisor lines are context only. Two-endpoint calls (both people on VoiceBridge, no call audio) get no hints. |
 | Model | Local Ollama, `NBA_MODEL`; default picked by benchmark between `qwen2.5:3b` and `qwen2.5:7b`. |
 
 Rejected: three LLM calls per turn (facts, intent, hint) — about 15-30 s per hint on CPU because Ollama runs
@@ -134,7 +134,6 @@ packs, known `priority`/`when` values). A broken pack stops the backend with a c
 
 - `submit()` after each customer final. If no turn runs, start one; if a turn runs, mark "dirty" so exactly
   one more turn runs afterwards on the latest transcript (nothing is lost, nothing piles up).
-- `close()` when the call's streams close; a running turn finishes and is saved.
 - Rule checks run in `submit()` itself, before the LLM turn, so rule hints are instant.
 
 **LLM**: `app/llm.py` gains nothing new except reuse of `OllamaLLM` with NBA settings (`NBA_MODEL`,
@@ -156,9 +155,10 @@ single model in RAM.
 
 ### Socket events
 
-- Web → server: `join_session {code, name?, domain?}` (domain only applied when the session is created by
-  this user and has none yet); `set_domain {code, domain}` → ack `{ok, error?}` (resets the auto lock if
-  `auto`).
+- REST: `POST /api/sessions` accepts an optional JSON body `{domain}` (default `auto`); the domain is set
+  when the call is created.
+- Web → server: `set_domain {code, domain}` → ack `{ok, error?}` (choosing `auto` clears the detected
+  domain).
 - Server → web (session room):
   - `nba_hint {code, id, text, kind: "rule"|"ai", intent, priority, ts}`
   - `nba_facts {code, facts}`
@@ -168,7 +168,9 @@ single model in RAM.
 
 ### Storage
 
-- `Session` gains `domain: str = "auto"` and `nba: dict = {"hints": [], "facts": {}}`; both in `to_dict()`.
+- `Session` gains `domain: str = "auto"` (the user's choice) and `nba: dict = {"hints": [], "facts": {},
+  "detected": None}` (`detected` = the domain found in auto mode); both in `to_dict()`. The domain in use is
+  `domain` unless it is `auto`, then `detected`. Rule ids already fired are the ids of saved rule hints.
 - SQLite: `domain TEXT`, `nba TEXT` (JSON) added through `_ADDED_COLUMNS`. Older rows load as `auto` and
   empty.
 - `rename_speaker` also renames inside saved hints (reuse `_replace_name`).
