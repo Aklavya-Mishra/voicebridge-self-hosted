@@ -1,6 +1,7 @@
 """Socket.IO events for live sessions.
 
 Client -> server: join_session {code, name?}, rename_speaker {code, speaker_id, name} -> ack {ok, error?},
+  set_domain {code, domain} -> ack {ok, error?} (call type for live hints),
   audio_chunk {code, audio, channels?}, stop_audio {code}, leave_session {code}
   audio is PCM16 at the configured sample rate. channels=2 means interleaved stereo from one endpoint:
   left = the user's mic, right = the call audio (the remote person, who does not run VoiceBridge).
@@ -14,7 +15,9 @@ one per user):
   The agent streams stereo audio_chunk (mic + speaker loopback) only into sessions it was started for.
 Server -> client: participants {code, participants}, transcript {...see pipeline payload},
                   stt_status {code, speaker, engine, reason} when a speaker falls back to local STT,
-                  speaker_renamed {code, speaker_id, name}
+                  speaker_renamed {code, speaker_id, name},
+                  live hints (app.nba): nba_hint {code, id, text, kind, intent, priority, ts},
+                  nba_facts {code, facts}, nba_domain {code, domain, auto}, nba_status {code, state, reason?}
 """
 import asyncio
 import logging
@@ -27,6 +30,7 @@ from app.analysis import analyse_session, mask_text
 from app.auth import AuthError, verify_token
 from app.config import Settings
 from app.llm import LlmChain
+from app.nba.service import NbaService
 from app.pipeline import DeepgramParticipantStream, ParticipantStream
 from app.segmenter import Segmenter
 from app.sessions import CALL_SPEAKER_NAME, SessionError, SessionStore, Utterance, call_speaker_id, normalize_code
@@ -63,9 +67,16 @@ def split_stereo(pcm: bytes) -> tuple[bytes, bytes]:
 
 class SocketHandlers:
     def __init__(
-        self, sio: socketio.AsyncServer, store: SessionStore, settings: Settings, stt: STTProvider, llm: LlmChain
+        self,
+        sio: socketio.AsyncServer,
+        store: SessionStore,
+        settings: Settings,
+        stt: STTProvider,
+        llm: LlmChain,
+        nba: NbaService | None = None,
     ):
         self._sio = sio
+        self._nba = nba
         self._llm = llm
         self._analysis: dict[str, asyncio.Task] = {}  # session code -> pending end-of-call analysis
         self._store = store
@@ -79,7 +90,7 @@ class SocketHandlers:
         # The speaker dict each live stream reads its name from; a rename updates it in place.
         self._stream_speakers: dict[tuple[str, str], dict] = {}
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
-                  "agent_start", "agent_stop", "rename_speaker")
+                  "agent_start", "agent_stop", "rename_speaker", "set_domain")
         for name in events:
             sio.on(name, getattr(self, name))
 
@@ -221,6 +232,19 @@ class SocketHandlers:
         await self._broadcast_participants(code)
         return {"ok": True}
 
+    async def set_domain(self, sid: str, data: dict) -> dict:
+        state = await self._sio.get_session(sid)
+        code = normalize_code((data or {}).get("code"))
+        if code not in state["codes"]:
+            return {"ok": False, "error": "Join the session first"}
+        if self._nba is None:
+            return {"ok": False, "error": "Live hints are turned off"}
+        try:
+            await self._nba.set_domain(code, str((data or {}).get("domain") or ""))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
+
     def _stream_for(self, code: str, speaker: dict) -> LiveStream:
         return self._streams.get((code, speaker["id"])) or self._new_stream(code, speaker)
 
@@ -244,6 +268,8 @@ class SocketHandlers:
             if masking:
                 utterance.text = mask_text(utterance.text)
             self._store.add_utterance(code, utterance)
+            if self._nba is not None:
+                await self._nba.on_final(code, utterance)
 
         async def notify(payload: dict) -> None:
             await self._sio.emit("stt_status", payload, room=room_for(code))

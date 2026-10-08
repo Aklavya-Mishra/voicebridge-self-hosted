@@ -7,16 +7,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import router
 from app.config import DEV_JWT_SECRET, Settings
-from app.llm import LlmChain, make_llm_chain
+from app.llm import LLM, LlmChain, OllamaLLM, make_llm_chain
+from app.nba.service import NbaService
 from app.sessions import SessionStore
-from app.socket_events import SocketHandlers
+from app.socket_events import SocketHandlers, room_for
 from app.stt import STTProvider, make_stt
 
 logger = logging.getLogger("voicebridge")
 
 
 def create_app(
-    settings: Settings | None = None, stt: STTProvider | None = None, llm: LlmChain | None = None
+    settings: Settings | None = None,
+    stt: STTProvider | None = None,
+    llm: LlmChain | None = None,
+    nba_llm: LLM | None = None,
 ) -> socketio.ASGIApp:
     settings = settings or Settings.from_env()
     if settings.jwt_secret == DEV_JWT_SECRET:
@@ -46,5 +50,16 @@ def create_app(
         cors_allowed_origins=list(settings.cors_origins),
         max_http_buffer_size=settings.max_chunk_bytes * 4,
     )
-    SocketHandlers(sio, store, settings, stt, llm)
+
+    nba = None
+    if settings.nba_enabled:
+        # Live hints use the local model only, whatever cloud keys are set.
+        nba_llm = nba_llm or OllamaLLM(settings, model=settings.nba_model, num_ctx=settings.nba_num_ctx)
+        logger.info("Live hints with: ollama %s", settings.nba_model)
+
+        async def nba_emit(code: str, event: str, payload: dict) -> None:
+            await sio.emit(event, payload, room=room_for(code))
+
+        nba = NbaService(store, settings, nba_llm, nba_emit)
+    SocketHandlers(sio, store, settings, stt, llm, nba)
     return socketio.ASGIApp(sio, other_asgi_app=api)
