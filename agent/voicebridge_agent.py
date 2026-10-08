@@ -208,8 +208,13 @@ def start_tray(stop: threading.Event) -> Tray:
     import pystray
     from PIL import Image, ImageDraw
 
+    # Same mark as the web app's favicon: an indigo tile, an arch (the bridge) over sound-wave bars.
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    ImageDraw.Draw(image).ellipse((4, 4, 60, 60), fill=(79, 70, 229, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((0, 0, 63, 63), radius=16, fill=(79, 70, 229, 255))
+    draw.arc((8, 16, 56, 64), start=205, end=335, fill=(199, 210, 254, 255), width=4)
+    for x, top in ((17, 30), (24, 26), (30, 24), (36, 26), (43, 30)):
+        draw.rounded_rectangle((x, top, x + 4, 49), radius=2, fill=(255, 255, 255, 255))
     icon = pystray.Icon(APP_NAME, image, "VoiceBridge Agent", menu=pystray.Menu(
         pystray.MenuItem(lambda item: f"VoiceBridge: {icon.title.split(': ', 1)[-1]}", None, enabled=False),
         pystray.MenuItem("Quit", lambda: (stop.set(), icon.stop())),
