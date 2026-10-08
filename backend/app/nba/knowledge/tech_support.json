@@ -1,0 +1,33 @@
+{
+  "domain": "tech_support",
+  "label": "Tech support",
+  "description": "Technical support for computers, devices, printers, software, apps and accounts: errors, setup, performance and access.",
+  "intents": [
+    {"name": "device_not_working", "description": "Hardware does not power on, crashes, overheats or a part fails.", "guidance": "Ask the model and what changed recently; start with the simplest check (power, cables, restart) before advanced steps.", "priority": "suggestion"},
+    {"name": "software_error", "description": "An app or the operating system shows an error, freezes or crashes.", "guidance": "Ask for the exact error text and when it appears; give one step at a time and check the result before the next.", "priority": "suggestion"},
+    {"name": "connectivity", "description": "Wi-Fi, network, Bluetooth or VPN problems on a device.", "guidance": "Ask whether other devices connect; then restart router and device, forget and rejoin the network, then check drivers or settings.", "priority": "suggestion"},
+    {"name": "account_access", "description": "Login problems, forgotten password, locked account or two-factor issues.", "guidance": "Verify identity per policy before changing anything and use the official reset flow; never ask for the password.", "priority": "alert"},
+    {"name": "performance", "description": "The device or an app is slow, laggy, or low on storage or memory.", "guidance": "Ask since when and what is running at the time; check startup apps, free storage and pending updates.", "priority": "suggestion"},
+    {"name": "setup_install", "description": "Installing, configuring or updating software or a new device.", "guidance": "Confirm the device and OS version, then give the next single setup step.", "priority": "suggestion"},
+    {"name": "general", "description": "Anything else: greetings, verification or unclear lines.", "guidance": "Suggest the next useful question that pins down the device and the problem.", "priority": "suggestion"}
+  ],
+  "facts": [
+    {"key": "customer_name", "description": "The customer's name"},
+    {"key": "device", "description": "Device or product model"},
+    {"key": "os", "description": "Operating system and version"},
+    {"key": "error_message", "description": "Exact error text or code"},
+    {"key": "issue", "description": "The main problem in a few words"},
+    {"key": "steps_tried", "description": "Troubleshooting already done"},
+    {"key": "ticket_id", "description": "Existing case or ticket number"}
+  ],
+  "phrase_rules": [
+    {"id": "ts-already-tried", "speaker": "customer", "phrases": ["already tried", "already restarted", "did that already"], "hint": "They already tried the basics: acknowledge it, note what was done and move to the next step.", "priority": "suggestion"},
+    {"id": "ts-error-code", "speaker": "customer", "phrases": ["error code", "error message", "it says error"], "hint": "Ask them to read out the exact error text or code.", "priority": "suggestion"},
+    {"id": "ts-locked-out", "speaker": "customer", "phrases": ["forgot my password", "locked out", "can't log in", "cannot log in"], "hint": "Account access: verify identity first and use the official reset flow; never ask for the password.", "priority": "alert"},
+    {"id": "ts-frustrated", "speaker": "customer", "phrases": ["this is ridiculous", "third time", "nothing works", "very frustrated"], "hint": "Frustrated customer: apologise, sum up what was tried, and commit to a clear next step.", "priority": "alert"}
+  ],
+  "fact_rules": [
+    {"id": "ts-device-unknown", "fact": "device", "when": "absent", "values": [], "hint": "Ask for the device model and OS version.", "priority": "suggestion"},
+    {"id": "ts-ticket-known", "fact": "ticket_id", "when": "present", "values": [], "hint": "A ticket exists: check its history before repeating steps already done.", "priority": "suggestion"}
+  ]
+}

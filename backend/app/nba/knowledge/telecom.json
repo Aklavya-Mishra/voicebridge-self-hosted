@@ -1,0 +1,32 @@
+{
+  "domain": "telecom",
+  "label": "Telecom",
+  "description": "Calls to a phone, mobile or internet provider: plans, billing, outages, upgrades, new connections, roaming and cancellation.",
+  "intents": [
+    {"name": "billing_dispute", "description": "The customer questions a charge, a higher bill or a double payment.", "guidance": "Ask for the bill month and the amount in question, explain the charge if it is known, and offer a review instead of promising a refund.", "priority": "suggestion"},
+    {"name": "plan_change", "description": "The customer wants to upgrade, downgrade or change a plan or data pack.", "guidance": "Ask about their usage (data, calls, roaming) and suggest the plan that fits; confirm price and start date only if known.", "priority": "suggestion"},
+    {"name": "network_issue", "description": "No signal, dropped calls, slow mobile data or an internet outage.", "guidance": "Ask the location, since when, and whether one device or all are affected; check for a known outage before device troubleshooting.", "priority": "suggestion"},
+    {"name": "cancellation", "description": "The customer wants to cancel, port out or switch provider.", "guidance": "Ask the main reason first and address it if possible; then explain the process and any contract terms without pressure.", "priority": "alert"},
+    {"name": "new_connection", "description": "The customer wants a new SIM, line, broadband connection or a move to a new address.", "guidance": "Confirm the address or area and the type of connection, then the documents needed.", "priority": "suggestion"},
+    {"name": "roaming", "description": "Questions about using the phone abroad.", "guidance": "Ask the destination and travel dates and suggest activating a roaming pack before travel.", "priority": "suggestion"},
+    {"name": "general", "description": "Anything else: greetings, verification or unclear lines.", "guidance": "Suggest the next useful question that identifies the account and the customer's need.", "priority": "suggestion"}
+  ],
+  "facts": [
+    {"key": "customer_name", "description": "The customer's name"},
+    {"key": "account_id", "description": "Account or customer ID (last digits only)"},
+    {"key": "current_plan", "description": "The plan or package the customer has now, e.g. prepaid, postpaid, fibre 100"},
+    {"key": "device", "description": "Phone or router model"},
+    {"key": "issue", "description": "The main problem in a few words"},
+    {"key": "location", "description": "Area or city where the problem happens"}
+  ],
+  "phrase_rules": [
+    {"id": "tel-cancel", "speaker": "customer", "phrases": ["cancel my plan", "cancel my connection", "switch provider", "port my number"], "hint": "Churn risk: ask the main reason before explaining how to cancel.", "priority": "alert"},
+    {"id": "tel-no-signal", "speaker": "customer", "phrases": ["no signal", "no network", "internet is down", "not working since"], "hint": "Ask the location and since when, then check for a known outage there.", "priority": "alert"},
+    {"id": "tel-high-bill", "speaker": "customer", "phrases": ["bill is too high", "charged twice", "extra charges", "wrong bill"], "hint": "Ask which bill month and which charge they are questioning.", "priority": "suggestion"},
+    {"id": "tel-escalation", "speaker": "customer", "phrases": ["raise a complaint", "escalate this", "talk to your manager"], "hint": "Escalation request: apologise, repeat the issue back, and give a ticket number or a next step with a time.", "priority": "alert"}
+  ],
+  "fact_rules": [
+    {"id": "tel-prepaid", "fact": "current_plan", "when": "equals", "values": ["prepaid"], "hint": "Prepaid customer: check recharge validity and balance first.", "priority": "suggestion"},
+    {"id": "tel-account-unknown", "fact": "account_id", "when": "absent", "values": [], "hint": "Ask for the account ID or registered number to find the account.", "priority": "suggestion"}
+  ]
+}

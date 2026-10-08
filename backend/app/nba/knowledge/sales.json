@@ -1,0 +1,33 @@
+{
+  "domain": "sales",
+  "label": "Sales",
+  "description": "Selling a product or service to a prospect or an existing customer: needs, product questions, pricing, objections and closing.",
+  "intents": [
+    {"name": "discovery", "description": "The customer describes their needs, their current setup or what they are looking for.", "guidance": "Ask one open question about the problem behind the request, who decides and by when. Do not pitch yet.", "priority": "suggestion"},
+    {"name": "product_question", "description": "The customer asks how the product works or whether it supports something.", "guidance": "Answer only from what was said on the call; if unsure, offer to confirm instead of guessing. Link the answer to the need they gave.", "priority": "suggestion"},
+    {"name": "price_objection", "description": "The customer says it costs too much, compares prices or asks for a discount.", "guidance": "Acknowledge the concern, ask what they compare it with, then restate the value for their need before any discount. Never invent prices or offers.", "priority": "alert"},
+    {"name": "competitor_mention", "description": "The customer names another vendor or an alternative they use or consider.", "guidance": "Ask what they like about it and what is missing; compare on the need they care about. Never criticise the competitor.", "priority": "suggestion"},
+    {"name": "timing_objection", "description": "The customer wants to wait, think it over, or says it is not the right time.", "guidance": "Ask what would need to be true to go ahead and agree a concrete next step with a date.", "priority": "suggestion"},
+    {"name": "buying_signal", "description": "The customer asks about contracts, onboarding, start dates, payment or next steps.", "guidance": "Confirm the choice and propose the next concrete step: quote, order or onboarding booking.", "priority": "alert"},
+    {"name": "general", "description": "Anything else: greetings, small talk or unclear lines.", "guidance": "Suggest the next useful question that moves the conversation towards the customer's need.", "priority": "suggestion"}
+  ],
+  "facts": [
+    {"key": "customer_name", "description": "The customer's name"},
+    {"key": "company", "description": "The customer's company or organisation"},
+    {"key": "need", "description": "The problem or goal the customer wants solved"},
+    {"key": "budget", "description": "Budget or price range mentioned"},
+    {"key": "timeline", "description": "When they want to decide or start"},
+    {"key": "decision_maker", "description": "Who makes or approves the decision"},
+    {"key": "current_solution", "description": "What they use today, including competitors"}
+  ],
+  "phrase_rules": [
+    {"id": "sales-too-expensive", "speaker": "customer", "phrases": ["too expensive", "too costly", "out of my budget", "cheaper option"], "hint": "Price concern: ask what they are comparing it with before offering any discount.", "priority": "alert"},
+    {"id": "sales-think-about-it", "speaker": "customer", "phrases": ["think about it", "get back to you", "not right now"], "hint": "Stall: ask what is holding them back and agree a follow-up date before the call ends.", "priority": "alert"},
+    {"id": "sales-send-details", "speaker": "customer", "phrases": ["send me the details", "email me the details", "send a brochure"], "hint": "Confirm their email and offer a short follow-up call to go through the details.", "priority": "suggestion"},
+    {"id": "sales-ready", "speaker": "customer", "phrases": ["how do i sign up", "where do i sign", "let's go ahead"], "hint": "Buying signal: confirm the plan and quantity, then move to the order or onboarding.", "priority": "alert"}
+  ],
+  "fact_rules": [
+    {"id": "sales-budget-unknown", "fact": "budget", "when": "absent", "values": [], "hint": "Budget not known yet: ask what range they have in mind.", "priority": "suggestion"},
+    {"id": "sales-decision-maker-unknown", "fact": "decision_maker", "when": "absent", "values": [], "hint": "Ask who else is involved in the decision.", "priority": "suggestion"}
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "domain": "marketing",
+  "label": "Marketing",
+  "description": "Marketing calls: lead follow-ups, campaign or offer enquiries, event and webinar invitations, surveys and advertising enquiries.",
+  "intents": [
+    {"name": "lead_follow_up", "description": "Following up with someone who downloaded content, signed up or showed interest.", "guidance": "Remind them what they showed interest in, ask what prompted it, and qualify the need with one question.", "priority": "suggestion"},
+    {"name": "campaign_inquiry", "description": "The customer asks about an offer, promotion or campaign they saw.", "guidance": "Ask where they saw it and explain the offer only as it was stated; ask which part interests them.", "priority": "suggestion"},
+    {"name": "event_invitation", "description": "Inviting to, or discussing, a webinar, demo day or event.", "guidance": "Give the date and the one benefit most relevant to them, then ask if they want to be registered.", "priority": "suggestion"},
+    {"name": "advertising_inquiry", "description": "The customer asks about advertising, sponsorship or promoting their business.", "guidance": "Ask about their goal, audience and budget before suggesting a package.", "priority": "suggestion"},
+    {"name": "feedback_survey", "description": "Collecting opinions about a product, brand or campaign.", "guidance": "Ask one short, neutral question at a time and thank them for each answer; do not lead the answer.", "priority": "suggestion"},
+    {"name": "not_interested", "description": "The person says they are not interested, busy, or asks not to be contacted.", "guidance": "Respect it: offer to update their contact preferences and end politely. Do not push.", "priority": "alert"},
+    {"name": "general", "description": "Anything else: greetings, small talk or unclear lines.", "guidance": "Suggest the next useful question that finds out what the person is interested in.", "priority": "suggestion"}
+  ],
+  "facts": [
+    {"key": "customer_name", "description": "The person's name"},
+    {"key": "company", "description": "The person's company or organisation"},
+    {"key": "interest", "description": "Product, offer or topic they are interested in"},
+    {"key": "lead_source", "description": "Where they heard about it: ad, email, event or referral"},
+    {"key": "audience", "description": "Who they want to reach, for advertising"},
+    {"key": "budget", "description": "Budget mentioned"},
+    {"key": "preferred_contact", "description": "Preferred channel and time to be contacted"}
+  ],
+  "phrase_rules": [
+    {"id": "mkt-do-not-contact", "speaker": "customer", "phrases": ["stop calling", "unsubscribe", "remove my number", "do not call"], "hint": "Do-not-contact request: confirm you will update their preferences and end the call politely.", "priority": "alert"},
+    {"id": "mkt-busy", "speaker": "customer", "phrases": ["i am busy", "call me later", "bad time"], "hint": "Ask for a better time and channel, confirm it, and end quickly.", "priority": "suggestion"},
+    {"id": "mkt-where-seen", "speaker": "customer", "phrases": ["saw your ad", "got your email", "saw it on"], "hint": "Ask which offer they saw so you discuss the right one.", "priority": "suggestion"}
+  ],
+  "fact_rules": [
+    {"id": "mkt-interest-known", "fact": "interest", "when": "present", "values": [], "hint": "Interest is known: offer the matching resource or a short demo.", "priority": "suggestion"},
+    {"id": "mkt-contact-unknown", "fact": "preferred_contact", "when": "absent", "values": [], "hint": "Ask how and when they prefer to be contacted.", "priority": "suggestion"}
+  ]
+}
