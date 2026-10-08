@@ -30,21 +30,11 @@ test('another app user appears under the name they entered', () => {
   assert.equal(text, 'Aklavya: Hi Ben.\nBen: Hello!\n')
 })
 
-test('one line per bubble: lines of the same turn are joined', () => {
+test('lines of the same speaker stay separate, one per transcript line', () => {
   const text = formatTranscript([msg('1', 'me', 'Aklavya', 'Hello,', 0, 1), msg('2', 'me', 'Aklavya', 'how are you?', 1.5, 2)])
-  assert.equal(text, 'Aklavya: Hello, how are you?\n')
-})
-
-test('a long pause from the same speaker starts a new line, as on screen', () => {
-  const text = formatTranscript([msg('1', 'me', 'Aklavya', 'One.', 0, 1), msg('2', 'me', 'Aklavya', 'Two.', 5, 6)])
-  assert.equal(text, 'Aklavya: One.\nAklavya: Two.\n')
+  assert.equal(text, 'Aklavya: Hello,\nAklavya: how are you?\n')
 })
 
 test('empty call gives an empty transcript', () => {
   assert.equal(formatTranscript([]), '')
-})
-
-test('reading view: consecutive lines of one speaker become one paragraph despite pauses', () => {
-  const text = formatTranscript([msg('1', 'me', 'Aklavya', 'One.', 0, 1), msg('2', 'me', 'Aklavya', 'Two.', 5, 6)], Infinity)
-  assert.equal(text, 'Aklavya: One. Two.\n')
 })

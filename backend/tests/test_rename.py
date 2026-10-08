@@ -52,6 +52,19 @@ def test_invalid_names_are_rejected(tmp_path, name):
         store.rename_speaker(code, "u1-call", name)
 
 
+def test_call_side_can_be_renamed_before_it_has_spoken(tmp_path):
+    store = SessionStore(db_path=str(tmp_path / "vb.db"))
+    code = store.create(ME).code  # agent started, "Computer" shown, no line from it yet
+    assert store.rename_speaker(code, "u1-call", "Rahul") == "Computer"
+    assert store.speaker_name(code, "u1-call", "Computer") == "Rahul"
+
+
+def test_call_side_of_a_non_participant_is_rejected(tmp_path):
+    store, code = seeded(tmp_path)
+    with pytest.raises(SessionError):
+        store.rename_speaker(code, "stranger-call", "Bob")
+
+
 def test_unknown_speaker_is_rejected(tmp_path):
     store, code = seeded(tmp_path)
     with pytest.raises(SessionError):

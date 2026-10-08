@@ -40,6 +40,13 @@ class InvalidName(SessionError):
 
 MAX_NAME_LENGTH = 40
 
+# The call audio a participant's desktop agent captures (the other person on the call) is its own speaker.
+CALL_SPEAKER_NAME = "Computer"
+
+
+def call_speaker_id(user_id: str) -> str:
+    return f"{user_id}-call"
+
 
 @dataclass
 class Utterance:
@@ -262,8 +269,13 @@ class SessionStore:
         if speaker_id in session.participants:
             old = session.participants[speaker_id]
             session.participants[speaker_id] = name
-        elif speaker_id in session.speaker_names or speaker_id in spoken:
-            old = session.speaker_names.get(speaker_id) or spoken[speaker_id]
+        elif (
+            speaker_id in session.speaker_names
+            or speaker_id in spoken
+            # A participant's call audio, shown as soon as their agent starts, before it has said anything.
+            or any(speaker_id == call_speaker_id(uid) for uid in session.participants)
+        ):
+            old = session.speaker_names.get(speaker_id) or spoken.get(speaker_id) or CALL_SPEAKER_NAME
             session.speaker_names[speaker_id] = name
         else:
             raise SessionNotFound("No such speaker in this call")
@@ -284,9 +296,9 @@ class SessionStore:
         self._save(session)
 
     def list_for(self, user_id: str) -> list[dict]:
-        """The user's calls, newest first, with a one-line preview."""
+        """The user's calls that have a transcript, newest first, with a one-line preview."""
         mine = sorted(
-            (s for s in self._sessions.values() if user_id in s.participants),
+            (s for s in self._sessions.values() if user_id in s.participants and s.transcript),
             key=lambda s: s.created_at,
             reverse=True,
         )
@@ -296,7 +308,6 @@ class SessionStore:
                 "kind": s.kind,
                 "created_at": s.created_at,
                 "participants": [{"id": uid, "name": name} for uid, name in s.participants.items()],
-                "lines": len(s.transcript),
                 "preview": s.transcript[0].text if s.transcript else "",
                 "summary": {"status": s.summary.get("status"), "sentiment": s.summary.get("sentiment")}
                 if s.summary

@@ -31,7 +31,7 @@ class Settings:
     partials_enabled: bool = True
     partial_interval_ms: int = 1500
 
-    stt_provider: str = "whisper"  # deepgram (cloud) | whisper (local faster-whisper) | sherpa (local streaming) | gemini | mock
+    stt_provider: str = "whisper"  # deepgram (cloud) | whisper (local faster-whisper) | mock
     stt_fallback: str = "whisper"  # deepgram only: local provider used when Deepgram is unreachable
     stt_language: str | None = None
     stt_concurrency: int = 4
@@ -53,17 +53,12 @@ class Settings:
     llm_num_ctx: int = 16384  # tokens of context: about an hour of call
     llm_cpu_only: bool = True
     gemini_model: str = "gemini-2.5-flash-lite"
-    vertex_project: str | None = None
-    vertex_location: str = "us-central1"
     whisper_model: str = "base"  # tiny | base | small | medium | large-v3 (bigger = more accurate, slower)
     whisper_device: str = "cpu"  # cpu | cuda
     whisper_compute_type: str = "int8"  # int8 on CPU; float16 on GPU
     whisper_beam_size: int = 1
     whisper_cpu_threads: int = 1  # per worker; 1 measured fastest per call on CPU
     whisper_num_workers: int = 2  # parallel transcriptions
-    sherpa_model_dir: str = "models/sherpa-onnx-streaming-zipformer-en-2023-06-26"
-    sherpa_num_threads: int = 1
-    final_pass: str = "whisper"  # sherpa only: whisper re-transcribes each finished sentence | none
 
     max_import_bytes: int = 100 * 1024 * 1024
     max_chunk_bytes: int = 64000
@@ -107,16 +102,11 @@ class Settings:
             llm_num_ctx=int(env("LLM_NUM_CTX", cls.llm_num_ctx)),
             llm_cpu_only=_bool(env("LLM_CPU_ONLY", "true")),
             gemini_model=env("GEMINI_MODEL", cls.gemini_model),
-            vertex_project=env("VERTEX_PROJECT") or None,
-            vertex_location=env("VERTEX_LOCATION", cls.vertex_location),
             whisper_model=env("WHISPER_MODEL", cls.whisper_model),
             whisper_device=env("WHISPER_DEVICE", cls.whisper_device),
             whisper_compute_type=env("WHISPER_COMPUTE_TYPE", cls.whisper_compute_type),
             whisper_beam_size=int(env("WHISPER_BEAM_SIZE", cls.whisper_beam_size)),
             whisper_cpu_threads=int(env("WHISPER_CPU_THREADS", cls.whisper_cpu_threads)),
             whisper_num_workers=int(env("WHISPER_NUM_WORKERS", cls.whisper_num_workers)),
-            sherpa_model_dir=env("SHERPA_MODEL_DIR", cls.sherpa_model_dir),
-            sherpa_num_threads=int(env("SHERPA_NUM_THREADS", cls.sherpa_num_threads)),
-            final_pass=env("FINAL_PASS", cls.final_pass).lower(),
             max_import_bytes=int(env("MAX_IMPORT_BYTES", cls.max_import_bytes)),
         )

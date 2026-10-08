@@ -22,25 +22,10 @@ def make_stt(settings: Settings) -> STTProvider:
         from app.stt.mock import MockSTT
 
         return MockSTT()
-    if settings.stt_provider == "gemini":
-        from app.stt.gemini import GeminiSTT
-
-        return GeminiSTT(settings)
     if settings.stt_provider == "whisper":
         from app.stt.whisper import WhisperSTT
 
         return WhisperSTT(settings)
-    if settings.stt_provider == "sherpa":
-        from app.stt.sherpa import SherpaSTT
-
-        refiner = None
-        if settings.final_pass == "whisper":
-            from app.stt.whisper import WhisperSTT
-
-            refiner = WhisperSTT(settings)
-        elif settings.final_pass != "none":
-            raise ValueError(f"Unknown FINAL_PASS: {settings.final_pass}")
-        return SherpaSTT(settings, refiner)
     raise ValueError(f"Unknown STT_PROVIDER: {settings.stt_provider}")
 
 

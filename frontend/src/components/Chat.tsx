@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import { toTurns } from '../lib/turns'
 import type { ChatMessage } from '../lib/types'
 
 interface Props {
@@ -26,24 +25,18 @@ export function Chat({ messages, myId, originTs, emptyHint }: Props) {
 
   return (
     <div className="chat" role="log" aria-live="polite">
-      {toTurns(messages).map((turn) => {
-        const mine = turn.speakerId === myId
-        const live = !turn.parts[turn.parts.length - 1].final
+      {messages.map((m) => {
+        const mine = m.speakerId === myId
         return (
-          <div key={turn.parts[0].id} className={`bubble-row ${mine ? 'mine' : 'theirs'}`}>
+          <div key={m.id} className={`bubble-row ${mine ? 'mine' : 'theirs'}`}>
             <div className="bubble">
               <div className="bubble-meta">
-                <span>{mine ? 'You' : turn.speakerName}</span>
-                <span>{clock(turn.startTs - originTs)}</span>
+                <span>{mine ? 'You' : m.speakerName}</span>
+                <span>{clock(m.startTs - originTs)}</span>
               </div>
               <div className="bubble-text">
-                {turn.parts.map((m, i) => (
-                  <span key={m.id} className={m.final ? '' : 'partial-text'}>
-                    {i > 0 && ' '}
-                    {m.text}
-                  </span>
-                ))}
-                {live && <span className="typing"> …</span>}
+                <span className={m.final ? '' : 'partial-text'}>{m.text}</span>
+                {!m.final && <span className="typing"> …</span>}
               </div>
             </div>
           </div>

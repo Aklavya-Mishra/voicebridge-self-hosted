@@ -37,7 +37,6 @@ export type CallSummary =
       action_items: string[]
       outcome: string
       sentiment: 'positive' | 'neutral' | 'negative'
-      // quality: number  // disabled in the backend (app/analysis.py)
     }
 
 /** Server `transcript` event. A final with empty text means "drop this bubble". */
@@ -65,7 +64,6 @@ export interface SessionSummary {
   kind: 'live' | 'import'
   created_at: number
   participants: User[]
-  lines: number
   preview: string
   summary: { status: CallSummary['status']; sentiment?: string } | null
 }

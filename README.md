@@ -45,11 +45,11 @@ npm run dev                     # http://localhost:5173
    **Computer** if their voice comes from your computer's audio. Then **Start mic**:
    - desktop agent running: **Start** captures your mic and the computer's audio (the call);
    - no agent: **Mic only** transcribes just your side (the dialog says the agent is not running).
-3. The chat shows your speech on the left and the other side on the right. Consecutive sentences from one
-   speaker share a bubble; a pause of 3 s or more, or a speaker change, starts a new one.
+3. The chat shows your speech on the left and the other side on the right, one bubble per sentence with
+   its own time.
    The ✎ next to a name in the call header renames that speaker for the whole call (e.g. **Computer** to
    the caller's real name): earlier lines, new lines, the saved transcript and the summary.
-4. **Transcript** downloads the call as text, one line per bubble:
+4. **Transcript** downloads the call as text, one line per sentence:
 
    ```
    Aklavya: How can I help you?
@@ -60,7 +60,7 @@ npm run dev                     # http://localhost:5173
 5. **Leave** asks for confirmation; it also stops the agent's recording for that call.
 6. Every call is saved as it happens (each finished sentence) in `backend/data/voicebridge.db` (SQLite;
    `DB_PATH` changes the location). **Past calls** on the home page lists them, newest first; opening one
-   shows its summary and transcript (`Name: text`, one paragraph per speaker turn) with a Back button.
+   shows its summary and transcript (`Name: text`, one line per sentence) with a Back button.
 7. Long numbers (card, phone, account) and emails are masked as `xxxxx` the moment a line is final, so they
    are never shown or saved in clear. When a call stops, it is analysed in the background (seconds on a
    cloud model, ~15-25 s for a short call on CPU): summary, purpose, outcome, action items and the caller's
@@ -124,25 +124,11 @@ Set `STT_PROVIDER` in `backend/.env` (`.env.example` uses `deepgram` with `whisp
 |---|---|
 | `deepgram` | Cloud, Nova-3, English + Hindi in one sentence (`DEEPGRAM_LANGUAGE=multi`; `en` for English only). `DEEPGRAM_API_KEY=...` from console.deepgram.com. Words appear ~0.3 s after speech. Each channel (your mic, the computer audio) has its own stream. If Deepgram is unreachable (bad key, no credit, network), that channel switches to `STT_FALLBACK` (default `whisper`) and the call shows a notice; audio Deepgram had not finalised is replayed locally, so nothing is lost. The next **Start** tries Deepgram again. File imports use Deepgram's pre-recorded API with the same fallback |
 | `whisper` | Local faster-whisper, no key. First start downloads the model (`WHISPER_MODEL`: `.env.example` uses `small`, which handles Hindi; `small.en` is more accurate for English only). Leave `STT_LANGUAGE` empty to auto-detect per sentence. `WHISPER_DEVICE=cuda` on an NVIDIA GPU |
-| `sherpa` | Lowest latency, English only. Local streaming model (sherpa-onnx), no key: words appear ~0.4 s after they are spoken. Each finished sentence is re-transcribed by Whisper for accuracy (`FINAL_PASS=whisper`, or `none`). Download the model once, below |
-| `gemini` | `GEMINI_API_KEY=...`, or `VERTEX_PROJECT=...` with Google credentials |
 | `mock` | No model; shows "(mock transcript: 1.4s of speech)". Handy for UI work |
 
 Whisper on CPU: a sentence takes ~0.7 s with `STT_LANGUAGE=en`, ~1.4 s with auto-detect. The defaults
 (`WHISPER_NUM_WORKERS=2`, `WHISPER_CPU_THREADS=1`, `OMP_WAIT_POLICY=PASSIVE`) come from measurements:
 multi-threaded OpenMP busy-waiting made 4 threads ~20x slower than 1 on the dev machine.
-
-Sherpa model download (310 MB, into `backend/models/`):
-
-```bash
-cd backend/models
-curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2
-tar xjf sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2
-```
-
-Measured on the dev CPU, words trail speech by 0.40 s (median) with this model. The alternative
-`sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06` (57 MB, same URL pattern) outputs punctuation and
-casing itself but trails by 0.88 s; select it with `SHERPA_MODEL_DIR`.
 
 Deepgram bills every second of audio sent while recording, silence included, per channel. Nova-3
 streaming costs $0.0048–0.0077/min (`en`) or $0.0058–0.0092/min (`multi`), so a one-hour call (your mic +

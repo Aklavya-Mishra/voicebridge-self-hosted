@@ -27,19 +27,16 @@ from app.analysis import analyse_session, mask_text
 from app.auth import AuthError, verify_token
 from app.config import Settings
 from app.llm import LlmChain
-from app.pipeline import DeepgramParticipantStream, ParticipantStream, StreamingParticipantStream
+from app.pipeline import DeepgramParticipantStream, ParticipantStream
 from app.segmenter import Segmenter
-from app.sessions import SessionError, SessionStore, Utterance, normalize_code
+from app.sessions import CALL_SPEAKER_NAME, SessionError, SessionStore, Utterance, call_speaker_id, normalize_code
 from app.stt import STTProvider
 from app.stt.deepgram import DeepgramSTT
 from app.vad import make_vad
 
 logger = logging.getLogger("voicebridge")
 
-LiveStream = ParticipantStream | StreamingParticipantStream | DeepgramParticipantStream
-
-# Speaker for the call-audio (right) channel of a stereo endpoint.
-CALL_SPEAKER_NAME = "Computer"
+LiveStream = ParticipantStream | DeepgramParticipantStream
 
 # How long the agent has to confirm start_recording.
 AGENT_ACK_TIMEOUT_S = 5.0
@@ -57,10 +54,6 @@ def room_for(code: str) -> str:
 
 def user_room(user_id: str) -> str:
     return f"user:{user_id}"
-
-
-def call_speaker_id(user: dict) -> str:
-    return f"{user['id']}-call"
 
 
 def split_stereo(pcm: bytes) -> tuple[bytes, bytes]:
@@ -205,7 +198,7 @@ class SocketHandlers:
 
     def _call_speaker(self, code: str, user: dict) -> dict:
         """The user's call-audio channel: "Computer" unless renamed in this call."""
-        speaker_id = call_speaker_id(user)
+        speaker_id = call_speaker_id(user["id"])
         return {"id": speaker_id, "name": self._store.speaker_name(code, speaker_id, CALL_SPEAKER_NAME)}
 
     async def rename_speaker(self, sid: str, data: dict) -> dict:
@@ -255,6 +248,12 @@ class SocketHandlers:
         async def notify(payload: dict) -> None:
             await self._sio.emit("stt_status", payload, room=room_for(code))
 
+        async def on_start(ts: float) -> None:
+            # This speaker started a sentence: others in the call who are mid-sentence get a new bubble after it.
+            for (c, speaker_id), other in list(self._streams.items()):
+                if c == code and speaker_id != user["id"] and hasattr(other, "cut"):
+                    await other.cut(ts)
+
         if isinstance(self._stt, DeepgramSTT):
             fallback = self._stt.fallback
             stream = DeepgramParticipantStream(
@@ -266,6 +265,7 @@ class SocketHandlers:
                 on_final=on_final,
                 notify=notify,
                 make_fallback=lambda: self._local_stream(code, user, fallback, emit, on_final),
+                on_start=on_start,
             )
         else:
             stream = self._local_stream(code, user, self._stt, emit, on_final)
@@ -273,23 +273,8 @@ class SocketHandlers:
         self._stream_speakers[(code, user["id"])] = user
         return stream
 
-    def _local_stream(
-        self, code: str, user: dict, stt: STTProvider, emit, on_final
-    ) -> ParticipantStream | StreamingParticipantStream:
+    def _local_stream(self, code: str, user: dict, stt: STTProvider, emit, on_final) -> ParticipantStream:
         s = self._settings
-        if hasattr(stt, "open_stream"):
-            # Streaming model: it segments sentences itself, so no VAD/segmenter.
-            return StreamingParticipantStream(
-                code=code,
-                speaker=user,
-                stt=stt,
-                sample_rate=s.sample_rate,
-                language=s.stt_language,
-                semaphore=self._semaphore,
-                emit=emit,
-                on_final=on_final,
-            )
-
         segmenter = Segmenter(
             make_vad(s),
             sample_rate=s.sample_rate,
@@ -314,9 +299,9 @@ class SocketHandlers:
 
     async def _close_stream(self, code: str, user_id: str) -> None:
         self._clocks.pop((code, user_id), None)
-        for speaker_id in (user_id, f"{user_id}-call"):
+        for speaker_id in (user_id, call_speaker_id(user_id)):
             self._stream_speakers.pop((code, speaker_id), None)
-        streams = [self._streams.pop((code, sid), None) for sid in (user_id, f"{user_id}-call")]
+        streams = [self._streams.pop((code, sid), None) for sid in (user_id, call_speaker_id(user_id))]
         await asyncio.gather(*(stream.close() for stream in streams if stream is not None))
         if any(s is not None for s in streams) and not any(c == code for c, _ in self._streams):
             self._schedule_analysis(code)

@@ -16,9 +16,13 @@ SPEAKER = {"id": "a", "name": "Aklavya"}
 T0 = 1000.0  # server clock of the first audio sample
 
 
-def results(text: str, start: float, duration: float, *, is_final: bool, speech_final: bool = False) -> str:
+def results(
+    text: str, start: float, duration: float, *, is_final: bool, speech_final: bool = False, words_from: float | None = None
+) -> str:
+    """`words_from`: the words are spread from this time to the end of the result (default: its start)."""
     words = text.split()
-    step = duration / max(1, len(words))
+    words_start = start if words_from is None else words_from
+    step = (start + duration - words_start) / max(1, len(words))
     return json.dumps(
         {
             "type": "Results",
@@ -31,7 +35,7 @@ def results(text: str, start: float, duration: float, *, is_final: bool, speech_
                     {
                         "transcript": text,
                         "words": [
-                            {"word": w, "start": start + i * step + 0.1, "end": start + (i + 1) * step - 0.1}
+                            {"word": w, "start": words_start + i * step + 0.1, "end": words_start + (i + 1) * step - 0.1}
                             for i, w in enumerate(words)
                         ],
                     }
@@ -104,7 +108,7 @@ class FakeLocalStream:
 def build(url: str, api_key: str = "test-key"):
     settings = Settings(deepgram_api_key=api_key, deepgram_url=url, deepgram_connect_timeout_s=2.0)
     stt = DeepgramSTT(settings, fallback=RecordingSTT("local text"))
-    emitted, stored, notices, fallbacks = [], [], [], []
+    emitted, stored, notices, fallbacks, starts = [], [], [], [], []
 
     async def emit(payload):
         emitted.append(payload)
@@ -114,6 +118,9 @@ def build(url: str, api_key: str = "test-key"):
 
     async def notify(payload):
         notices.append(payload)
+
+    async def on_start(ts):
+        starts.append(ts)
 
     def make_fallback():
         fallbacks.append(FakeLocalStream())
@@ -128,7 +135,9 @@ def build(url: str, api_key: str = "test-key"):
         on_final=on_final,
         notify=notify,
         make_fallback=make_fallback,
+        on_start=on_start,
     )
+    build.starts = starts
     return stream, emitted, stored, notices, fallbacks
 
 
@@ -176,6 +185,66 @@ async def test_finalized_text_without_pause_is_stored_on_close():
         await stream.close()
 
     assert [u.text for u in stored] == ["good morning"]
+
+
+async def test_words_shown_live_but_missing_from_the_final_are_kept():
+    # Seen on real calls: Deepgram's final for a sentence ending in a number held only the number.
+    async def script(ws, received):
+        if received == 1.0:
+            await ws.send(results("So, my credit card number is", 0.0, 1.0, is_final=False))
+        elif received == 2.0:
+            await ws.send(results("So, my credit card number is eight seven", 0.0, 2.0, is_final=False))
+        elif received == 3.0:
+            await ws.send(results("87548734.", 0.0, 3.0, is_final=True, speech_final=True, words_from=1.4))
+
+    async with FakeDeepgram(script) as server:
+        stream, emitted, stored, *_ = build(server.url)
+        await feed(stream, tone(3.0))
+        await stream.close()
+
+    assert [u.text for u in stored] == ["So, my credit card number is 87548734."]
+    assert stored[0].start_ts == pytest.approx(T0 + 0.1, abs=0.01)
+
+
+async def test_other_speaker_cuts_the_open_sentence_and_the_rest_continues_in_a_new_bubble():
+    async def script(ws, received):
+        if received == 2.0:
+            await ws.send(results("I was calling about my booking for next week", 0.0, 2.0, is_final=False))
+        elif received == 2.5:
+            await ws.send(results("I was calling about my booking for next week", 0.0, 2.0, is_final=True))
+        elif received == 3.0:
+            await ws.send(results("please", 2.0, 1.0, is_final=True, speech_final=True))
+
+    async with FakeDeepgram(script) as server:
+        stream, emitted, stored, *_ = build(server.url)
+        await feed(stream, tone(2.0))
+        await asyncio.sleep(0.05)
+        await stream.cut(T0 + 1.2)  # the other speaker started talking 1.2 s in
+        await feed(stream, tone(1.0), start_ts=T0 + 2.0)
+        await stream.close()
+
+    assert [u.text for u in stored] == ["I was calling about my", "booking for next week please"]
+    assert stored[0].start_ts == pytest.approx(T0 + 0.1, abs=0.01)
+    assert stored[1].start_ts >= T0 + 1.2
+    finals = [e for e in emitted if e["final"]]
+    assert [f["text"] for f in finals] == ["I was calling about my", "booking for next week please"]
+    assert finals[0]["utterance_id"] != finals[1]["utterance_id"]
+    # Only the speaker's own new sentence is announced; the continuation after the cut is not.
+    assert build.starts == [pytest.approx(T0 + 0.1, abs=0.01)]
+
+
+async def test_cut_before_the_sentence_started_changes_nothing():
+    async def script(ws, received):
+        if received == 1.0:
+            await ws.send(results("hello there", 0.5, 0.5, is_final=True, speech_final=True))
+
+    async with FakeDeepgram(script) as server:
+        stream, emitted, stored, *_ = build(server.url)
+        await stream.cut(T0 + 0.2)
+        await feed(stream, tone(1.0))
+        await stream.close()
+
+    assert [u.text for u in stored] == ["hello there"]
 
 
 async def test_rejected_key_falls_back_to_local_with_all_audio():
@@ -297,4 +366,16 @@ async def test_socket_handlers_use_deepgram_stream_with_local_fallback():
                               DeepgramSTT(settings, fallback=RecordingSTT("local")), LlmChain([]))
     stream = handlers._new_stream("ABCDEF", SPEAKER)
     assert isinstance(stream, DeepgramParticipantStream)
+
+    # A speaker starting a sentence cuts the other speakers' open sentences in the same call only.
+    other, elsewhere = handlers._new_stream("ABCDEF", {"id": "b", "name": "Computer"}), handlers._new_stream("ZZZZZZ", {"id": "c", "name": "C"})
+    cuts = []
+    for s in (other, elsewhere):
+        s.cut = lambda ts, s=s: _record(cuts, s, ts)
+    await stream._on_start(T0)
+    assert cuts == [(other, T0)]
     assert isinstance(stream._make_fallback(), ParticipantStream)
+
+
+async def _record(cuts, stream, ts):
+    cuts.append((stream, ts))

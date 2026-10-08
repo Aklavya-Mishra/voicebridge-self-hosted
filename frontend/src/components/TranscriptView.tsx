@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { getSession } from '../lib/api'
-import { formatTranscript } from '../lib/transcript'
 import { fromUtterance, type CallSummary, type Session } from '../lib/types'
 
 interface Props {
@@ -34,15 +33,7 @@ export function TranscriptView({ code, token, onBack }: Props) {
     return () => clearInterval(timer)
   }, [pending, code, token])
 
-  const lines = session
-    ? formatTranscript(session.transcript.map(fromUtterance), Infinity) // one paragraph per speaker turn
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          const i = line.indexOf(': ')
-          return { name: line.slice(0, i), text: line.slice(i + 2) }
-        })
-    : []
+  const lines = session ? session.transcript.map(fromUtterance) : []
 
   return (
     <div className="card transcript-view">
@@ -53,9 +44,9 @@ export function TranscriptView({ code, token, onBack }: Props) {
       {error && <p className="error">{error}</p>}
       {session && lines.length > 0 && <SummaryBlock summary={session.summary} />}
       {session && lines.length === 0 && <p className="muted">This call has no transcript.</p>}
-      {lines.map((line, i) => (
-        <p key={i} className="transcript-line">
-          <strong>{line.name}:</strong> {line.text}
+      {lines.map((line) => (
+        <p key={line.id} className="transcript-line">
+          <strong>{line.speakerName}:</strong> {line.text}
         </p>
       ))}
     </div>
@@ -70,8 +61,6 @@ function SummaryBlock({ summary }: { summary: CallSummary | null }) {
     <section className="summary-box" aria-label="Call summary">
       <div className="summary-tags">
         <span className={`pill sentiment-${summary.sentiment}`}>{summary.sentiment}</span>
-        {/* Quality score is disabled in the backend (app/analysis.py); restore with it:
-        <span className="pill">Quality {summary.quality}/5</span> */}
       </div>
       <p>{summary.summary}</p>
       <dl>

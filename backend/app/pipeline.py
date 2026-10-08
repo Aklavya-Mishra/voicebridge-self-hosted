@@ -1,4 +1,4 @@
-"""One live speaker's path: audio -> segmenter -> STT -> transcript events (or audio -> streaming STT)."""
+"""One live speaker's path: audio -> segmenter -> STT -> transcript events (or audio -> Deepgram)."""
 import asyncio
 import json
 import logging
@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
+from app.analysis import mask_text
 from app.segmenter import CANCEL, PARTIAL, Segment, Segmenter
 from app.sessions import Utterance
 from app.stt import STTProvider, clean_transcript
@@ -17,6 +18,34 @@ logger = logging.getLogger("voicebridge")
 
 Emit = Callable[[dict], Awaitable[None]]
 OnFinal = Callable[[Utterance], Awaitable[None]]
+Word = tuple[float, float, str]  # (start, end, text) of one recognised word
+# One Deepgram result: its words, and its text as Deepgram formatted it ("87548734", not "eight seven...").
+Part = tuple[list[Word], str]
+
+
+def _words_text(words: list[Word]) -> str:
+    return " ".join(w[2] for w in words)
+
+
+def _text(parts: list[Part]) -> str:
+    return " ".join(text for _, text in parts)
+
+
+def _split(parts: list[Part], at: float) -> tuple[list[Part], list[Part]]:
+    """Parts with words starting before `at`, and from `at` on. A part spanning `at` is split by its words."""
+    before: list[Part] = []
+    after: list[Part] = []
+    for words, text in parts:
+        early = [w for w in words if w[0] < at]
+        late = words[len(early):]
+        if not late:
+            before.append((words, text))
+        elif not early:
+            after.append((words, text))
+        else:
+            before.append((early, _words_text(early)))
+            after.append((late, _words_text(late)))
+    return before, after
 
 
 class ParticipantStream:
@@ -121,174 +150,8 @@ class ParticipantStream:
         }
 
 
-# Clip sent to the refiner: from shortly before the first word to shortly after the last one.
-# Token timestamps trail the real word onset, and the model reports a sentence end only after the
-# next word may have started, so the clip is cut by timestamps, never at the end-of-sentence signal.
-REFINE_LEAD_S = 0.5
-REFINE_TAIL_S = 0.35
-# Recent audio kept for the refiner, across sentence boundaries.
-AUDIO_BUFFER_S = 30.0
 # Re-anchor the stream clock when chunk timestamps drift further than this (seconds).
 CLOCK_RESYNC_S = 1.0
-
-
-class StreamingParticipantStream:
-    """One live speaker on a streaming model (sherpa): words are emitted as they are recognised.
-
-    The model marks the end of each sentence. The sentence is then optionally re-transcribed by
-    the refiner (Whisper) for accuracy before it is stored as final.
-    Times below are seconds of audio fed since the stream opened unless named *_ts (server clock).
-    """
-
-    def __init__(
-        self,
-        *,
-        code: str,
-        speaker: dict,
-        stt,  # SherpaSTT
-        sample_rate: int,
-        language: str | None,
-        semaphore: asyncio.Semaphore,
-        emit: Emit,
-        on_final: OnFinal,
-    ):
-        self._code = code
-        self._speaker = speaker
-        self._stt = stt
-        self._sample_rate = sample_rate
-        self._language = language
-        self._semaphore = semaphore
-        self._emit = emit
-        self._on_final = on_final
-        self._stream = stt.open_stream()
-        # Chunks arrive as separate tasks; the lock keeps them in order and off the model concurrently.
-        self._lock = asyncio.Lock()
-        self._tasks: set[asyncio.Task] = set()
-        self._closed = False
-        self._fed = 0.0
-        self._clock_base_ts: float | None = None  # server time of audio second 0
-        self._buffer = bytearray()
-        self._buffer_start = 0.0
-        self._prev_end = 0.0  # end of the previous sentence's refiner clip
-        self._reset_at = 0.0  # where the model's timestamps start counting
-        self._new_sentence()
-
-    def _new_sentence(self) -> None:
-        self._utterance_id: str | None = None
-        self._first_word = 0.0
-        self._last_word = 0.0
-        self._text = ""
-
-    async def push(self, pcm: bytes, ts: float) -> None:
-        async with self._lock:
-            if self._closed:
-                return
-            if self._clock_base_ts is None or abs(ts - self._fed - self._clock_base_ts) > CLOCK_RESYNC_S:
-                self._clock_base_ts = ts - self._fed
-            self._buffer += pcm
-            self._fed += len(pcm) / 2 / self._sample_rate
-            excess = len(self._buffer) - int(AUDIO_BUFFER_S * self._sample_rate) * 2
-            if excess > 0:
-                del self._buffer[:excess]
-                self._buffer_start += excess / 2 / self._sample_rate
-            result = await asyncio.to_thread(self._stt.decode, self._stream, pcm)
-            await self._handle(result)
-            if result.endpoint:
-                if self._utterance_id:
-                    logger.debug("Sentence end detected %.2fs after its last word", self._fed - self._last_word)
-                self._stt.reset(self._stream)
-                self._reset_at = self._fed
-                self._new_sentence()
-
-    async def close(self) -> None:
-        async with self._lock:
-            if not self._closed:
-                self._closed = True
-                if self._clock_base_ts is not None:
-                    await self._handle(await asyncio.to_thread(self._stt.finish, self._stream))
-        if self._tasks:
-            # Shielded like ParticipantStream.close: pending refinements still finish and get stored.
-            await asyncio.shield(asyncio.gather(*self._tasks, return_exceptions=True))
-
-    async def _handle(self, result) -> None:
-        if result.text and result.timestamps:
-            if self._utterance_id is None:
-                self._utterance_id = uuid.uuid4().hex[:12]
-                self._first_word = self._reset_at + result.timestamps[0]
-            self._last_word = self._reset_at + result.timestamps[-1]
-        if self._utterance_id is None:
-            return
-        if result.text and result.text != self._text:
-            self._text = result.text
-            await self._emit(self._partial_payload(result.text))
-        if result.endpoint:
-            await self._finish_sentence()
-
-    async def _finish_sentence(self) -> None:
-        clip_start = max(self._prev_end, self._first_word - REFINE_LEAD_S, self._buffer_start)
-        clip_end = min(self._fed, self._last_word + REFINE_TAIL_S)
-        self._prev_end = clip_end
-        utterance = Utterance(
-            id=self._utterance_id,
-            speaker_id=self._speaker["id"],
-            speaker_name=self._speaker["name"],
-            text=self._text,
-            start_ts=self._clock_base_ts + self._first_word,
-            end_ts=self._clock_base_ts + clip_end,
-        )
-        refiner = getattr(self._stt, "refiner", None)
-        if refiner is None:
-            await self._store(utterance)
-            return
-        pcm = bytes(self._buffer[self._byte_at(clip_start) : self._byte_at(clip_end)])
-        task = asyncio.create_task(self._refine(refiner, utterance, pcm))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    def _byte_at(self, seconds: float) -> int:
-        return max(0, int((seconds - self._buffer_start) * self._sample_rate)) * 2
-
-    async def _refine(self, refiner: STTProvider, utterance: Utterance, pcm: bytes) -> None:
-        queued = time.perf_counter()
-        async with self._semaphore:
-            started = time.perf_counter()
-            try:
-                text = clean_transcript(await refiner.transcribe(pcm, self._sample_rate, self._language))
-            except Exception:
-                logger.exception("Refinement failed for session %s; keeping the streaming text", self._code)
-                text = ""
-        logger.debug(
-            "Refined %.1fs clip in %.2fs (queued %.2fs)",
-            len(pcm) / 2 / self._sample_rate, time.perf_counter() - started, started - queued,
-        )
-        if text:
-            utterance.text = text
-        await self._store(utterance)
-
-    async def _store(self, utterance: Utterance) -> None:
-        await self._on_final(utterance)
-        await self._emit(
-            {
-                "code": self._code,
-                "utterance_id": utterance.id,
-                "speaker": {"id": self._speaker["id"], "name": self._speaker["name"]},
-                "text": utterance.text,
-                "start_ts": utterance.start_ts,
-                "end_ts": utterance.end_ts,
-                "final": True,
-            }
-        )
-
-    def _partial_payload(self, text: str) -> dict:
-        return {
-            "code": self._code,
-            "utterance_id": self._utterance_id,
-            "speaker": {"id": self._speaker["id"], "name": self._speaker["name"]},
-            "text": text,
-            "start_ts": self._clock_base_ts + self._first_word,
-            "end_ts": self._clock_base_ts + self._fed,
-            "final": False,
-        }
 
 
 # Idle connections are closed by Deepgram after ~10 s without data; ping well before that.
@@ -306,6 +169,8 @@ class DeepgramParticipantStream:
     Audio Deepgram has not finalised yet is kept. If the connection drops, one reconnect is tried
     and that audio is re-sent; if Deepgram is unreachable, the audio is replayed into the local
     stream from make_fallback() and this speaker stays local until the mic is restarted.
+    When another speaker in the call starts a sentence, cut() ends this speaker's open sentence at that
+    moment and the words after it continue in a new bubble, so the chat reads in speaking order.
     Times below are seconds of audio received since the stream opened unless named *_ts.
     """
 
@@ -319,7 +184,8 @@ class DeepgramParticipantStream:
         emit: Emit,
         on_final: OnFinal,
         notify: Emit,
-        make_fallback: Callable[[], "ParticipantStream | StreamingParticipantStream"],
+        make_fallback: Callable[[], ParticipantStream],
+        on_start: Callable[[float], Awaitable[None]] | None = None,
     ):
         self._code = code
         self._speaker = speaker
@@ -329,6 +195,7 @@ class DeepgramParticipantStream:
         self._on_final = on_final
         self._notify = notify
         self._make_fallback = make_fallback
+        self._on_start = on_start  # called with the server time of each new sentence's first word
         self._lock = asyncio.Lock()
         self._conn = None
         self._receiver: asyncio.Task | None = None
@@ -342,11 +209,13 @@ class DeepgramParticipantStream:
         self._buffer = bytearray()  # audio Deepgram has not finalised yet
         self._buffer_start = 0.0  # = end of Deepgram's last final result
         self._conn_offset = 0.0  # Deepgram's times on this connection count from here
+        self._interim: list[Part] = []  # the latest live result, not final yet
+        self._floor = 0.0  # words starting before this were already stored by cut()
         self._new_sentence()
 
     def _new_sentence(self) -> None:
         self._utterance_id: str | None = None
-        self._parts: list[str] = []
+        self._parts: list[Part] = []  # finalised results of the open sentence
         self._first_word = 0.0
         self._last_word = 0.0
 
@@ -467,22 +336,78 @@ class DeepgramParticipantStream:
         if message.get("type") != "Results":
             return
         alternative = message["channel"]["alternatives"][0]
-        text = alternative.get("transcript", "").strip()
-        words = alternative.get("words") or []
-        if text and words and self._utterance_id is None:
+        all_words = [
+            (self._conn_offset + w["start"], self._conn_offset + w["end"], w.get("punctuated_word") or w["word"])
+            for w in alternative.get("words") or []
+        ]
+        words = [w for w in all_words if w[0] >= self._floor]
+        text = alternative.get("transcript", "").strip() if len(words) == len(all_words) else _words_text(words)
+        part = (words, text) if words and text else None
+        if not message.get("is_final"):
+            self._interim = [part] if part else []
+            if part:
+                await self._start_sentence(words[0][0])
+                await self._emit(self._partial_payload())
+            return
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Deepgram final (speech_final=%s, %d words) for session %s: %r",
+                message.get("speech_final"), len(words), self._code, mask_text(text),
+            )
+        if part:
+            part = self._with_dropped_words(part)
+            await self._start_sentence(part[0][0][0])
+            self._parts.append(part)
+            self._last_word = part[0][-1][1]
+        self._interim = []
+        self._confirm(self._conn_offset + message["start"] + message["duration"])
+        if message.get("speech_final"):
+            await self._finish_sentence()
+        elif part:
+            await self._emit(self._partial_payload())
+
+    async def _start_sentence(self, first_word: float) -> None:
+        if self._utterance_id is not None:
+            return
+        self._utterance_id = uuid.uuid4().hex[:12]
+        self._first_word = first_word
+        if self._on_start:
+            await self._on_start(self._clock_base_ts + first_word)
+
+    def _with_dropped_words(self, part: Part) -> Part:
+        """Deepgram's final sometimes leaves out words its live results showed, e.g. only the number of
+        "my card number is 8754...". Words the live result had before the final's first word are kept."""
+        words, text = part
+        dropped = [w for interim_words, _ in self._interim for w in interim_words if w[1] <= words[0][0]]
+        if not dropped:
+            return part
+        logger.debug("Kept %d words missing from Deepgram's final for session %s", len(dropped), self._code)
+        return dropped + words, f"{_words_text(dropped)} {text}"
+
+    async def cut(self, at_ts: float) -> None:
+        """Another speaker started at `at_ts` (server clock): store this speaker's words spoken before then
+        as a finished bubble; later words continue in a new one, shown after the other speaker's."""
+        if self._local or self._utterance_id is None or self._clock_base_ts is None:
+            return
+        at = at_ts - self._clock_base_ts
+        spoken, rest = _split(self._parts, at)
+        spoken_interim, rest_interim = _split(self._interim, at)
+        spoken += spoken_interim
+        if at <= self._first_word or not spoken:
+            return
+        utterance_id, first = self._utterance_id, self._first_word
+        self._floor = max(self._floor, at)
+        self._new_sentence()
+        self._interim = rest_interim
+        if rest or rest_interim:
+            # The continuation is not a new sentence of this speaker, so it does not cut anyone.
             self._utterance_id = uuid.uuid4().hex[:12]
-            self._first_word = self._conn_offset + words[0]["start"]
-        if message.get("is_final"):
-            if text and words:
-                self._parts.append(text)
-                self._last_word = self._conn_offset + words[-1]["end"]
-            self._confirm(self._conn_offset + message["start"] + message["duration"])
-            if message.get("speech_final"):
-                await self._finish_sentence()
-            elif text:
-                await self._emit(self._partial_payload(" ".join(self._parts)))
-        elif text:
-            await self._emit(self._partial_payload(" ".join([*self._parts, text])))
+            self._first_word = (rest or rest_interim)[0][0][0][0]
+            self._parts = rest
+            self._last_word = rest[-1][0][-1][1] if rest else 0.0
+        await self._store(utterance_id, spoken, first, spoken[-1][0][-1][1])
+        if self._utterance_id:
+            await self._emit(self._partial_payload())
 
     def _confirm(self, until: float) -> None:
         """Deepgram finalised audio up to `until`: it no longer needs to be kept for a replay."""
@@ -500,11 +425,14 @@ class DeepgramParticipantStream:
             # Only interim text was shown; a final with empty text removes that bubble.
             await self._emit(self._payload(utterance_id, "", first, self._fed, final=True))
             return
+        await self._store(utterance_id, parts, first, last)
+
+    async def _store(self, utterance_id: str, parts: list[Part], first: float, last: float) -> None:
         utterance = Utterance(
             id=utterance_id,
             speaker_id=self._speaker["id"],
             speaker_name=self._speaker["name"],
-            text=clean_transcript(" ".join(parts)),
+            text=clean_transcript(_text(parts)),
             start_ts=self._clock_base_ts + first,
             end_ts=self._clock_base_ts + last,
         )
@@ -514,7 +442,8 @@ class DeepgramParticipantStream:
     def _speaker_ref(self) -> dict:
         return {"id": self._speaker["id"], "name": self._speaker["name"]}
 
-    def _partial_payload(self, text: str) -> dict:
+    def _partial_payload(self) -> dict:
+        text = _text(self._parts + self._interim)
         return self._payload(self._utterance_id, text, self._first_word, self._fed, final=False)
 
     def _payload(self, utterance_id: str, text: str, start: float, end: float, final: bool) -> dict:

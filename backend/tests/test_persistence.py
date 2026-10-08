@@ -42,14 +42,23 @@ def test_list_for_user_newest_first_with_preview(tmp_path):
     old = store.create(ME)
     store.add_utterance(old.code, utt("a", "First call.", 1.0))
     new = store.create(ME)
+    store.add_utterance(new.code, utt("b", "Second call.", 2.0))
     store.create({"id": "someone-else", "name": "X"})
     calls = store.list_for("u1")
     assert [c["code"] for c in calls] == [new.code, old.code]
-    assert calls[1]["lines"] == 1 and calls[1]["preview"] == "First call."
-    assert calls[0]["lines"] == 0 and calls[0]["preview"] == ""
+    assert calls[1]["preview"] == "First call."
+    assert calls[0]["preview"] == "Second call."
     assert calls[0]["summary"] is None
     store.set_summary(old.code, {"status": "ready", "sentiment": "positive", "summary": "long text"})
     assert store.list_for("u1")[1]["summary"] == {"status": "ready", "sentiment": "positive"}
+
+
+def test_calls_without_a_transcript_are_not_listed(tmp_path):
+    store = SessionStore(db_path=str(tmp_path / "vb.db"))
+    spoken = store.create(ME)
+    store.add_utterance(spoken.code, utt("a", "Hello.", 1.0))
+    store.create(ME)  # started, nothing transcribed
+    assert [c["code"] for c in store.list_for("u1")] == [spoken.code]
 
 
 def test_without_db_path_nothing_is_written(tmp_path, monkeypatch):
@@ -73,6 +82,7 @@ async def client(tmp_path):
     settings = Settings(jwt_secret="test-secret", db_path=str(tmp_path / "vb.db"))
     app = create_app(settings, stt=RecordingSTT())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        c.store = app.other_asgi_app.state.store
         yield c
 
 
@@ -80,6 +90,9 @@ async def test_past_calls_api_lists_my_calls(client):
     token = (await client.post("/api/auth/login", json={"name": "Aklavya"})).json()["token"]
     h = {"Authorization": f"Bearer {token}"}
     code = (await client.post("/api/sessions", headers=h)).json()["session"]["code"]
+    (await client.post("/api/sessions", headers=h))  # nothing said: not listed
+    me = (await client.get("/api/auth/me", headers=h)).json()["user"]
+    client.store.add_utterance(code, utt("a", "Hello.", 1.0, me))
     calls = (await client.get("/api/sessions", headers=h)).json()["sessions"]
     assert [c["code"] for c in calls] == [code]
     assert (await client.get("/api/sessions")).status_code == 401
