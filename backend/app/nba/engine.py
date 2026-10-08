@@ -20,6 +20,8 @@ DEDUPE_WINDOW = 10  # a new hint is compared with this many earlier ones
 MAX_FACT_KEY = 40
 MAX_FACT_VALUE = 80
 EMPTY_VALUES = {"", "none", "null", "n/a", "unknown", MASK}
+# Placeholders a model writes for a value it does not know: "xxx", "XX", "-", "...", "?".
+_PLACEHOLDER = re.compile(r"^(?:x+|[\W_]+)$", re.IGNORECASE)
 
 SYSTEM_PROMPT = (
     "You help a person on a live call (the advisor) decide what to say or do next. "
@@ -130,7 +132,7 @@ def merge_facts(facts: dict[str, str], items) -> bool:
             continue
         key = re.sub(r"\W+", "_", str(item.get("key") or "").strip().lower()).strip("_")[:MAX_FACT_KEY]
         value = _clean(item.get("value"))[:MAX_FACT_VALUE]
-        if not key or value.lower() in EMPTY_VALUES:
+        if not key or value.lower() in EMPTY_VALUES or _PLACEHOLDER.match(value):
             continue
         if facts.get(key) != value:
             facts[key] = value

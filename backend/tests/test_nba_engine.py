@@ -146,3 +146,11 @@ def test_model_is_asked_only_for_new_facts():
     """Facts merge into the known ones, so the model need not repeat them: fewer tokens, faster on CPU."""
     system, _, _ = build_prompt(NbaState(), LINES, None)
     assert "only facts that are new or changed" in system
+
+
+async def test_placeholder_fact_values_are_dropped():
+    """Seen live: qwen2.5 writes 'xxx' for facts it does not know; they must not reach Customer info."""
+    state = NbaState(domain="telecom")
+    facts = [{"key": "account_id", "value": "xxx"}, {"key": "customer_name", "value": "XX"}, {"key": "plan", "value": "-"}]
+    result = await run_turn(state, LINES, FakeLLM(answer(facts=facts)), SETTINGS)
+    assert state.facts == {} and not result.facts_changed
