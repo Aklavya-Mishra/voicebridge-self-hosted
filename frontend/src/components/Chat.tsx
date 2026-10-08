@@ -6,7 +6,8 @@ interface Props {
   myId: string
   /** Timestamp shown as 00:00 (call start). */
   originTs: number
-  emptyHint: string
+  /** Text shown while there are no messages (none by default). */
+  emptyHint?: string
 }
 
 const clock = (seconds: number) => {
@@ -15,7 +16,7 @@ const clock = (seconds: number) => {
 }
 
 /** Mirrored chat: my speech on the left, the other person on the right. */
-export function Chat({ messages, myId, originTs, emptyHint }: Props) {
+export function Chat({ messages, myId, originTs, emptyHint = '' }: Props) {
   const endRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })

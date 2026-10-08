@@ -194,12 +194,12 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
   }
 
   const setMicMuted = async (next: boolean) => {
+    setMuted(next) // at once; undone if the server refuses
     const ack = await socketRef.current?.emitWithAck('mute_mic', { code, muted: next })
     if (!ack?.ok) {
+      setMuted(!next)
       setError(ack?.error ?? 'Could not change the microphone')
-      return
     }
-    setMuted(next)
   }
 
   const stopMic = async () => {
@@ -343,7 +343,6 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
           messages={sorted}
           myId={me.id}
           originTs={originTs}
-          emptyHint={recording ? 'Listening… start talking.' : 'Start your mic to transcribe your side of the call.'}
         />
       </div>
 

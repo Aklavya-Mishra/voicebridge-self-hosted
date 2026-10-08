@@ -92,6 +92,7 @@ class SocketHandlers:
         # The speaker dict each live stream reads its name from; a rename updates it in place.
         self._stream_speakers: dict[tuple[str, str], dict] = {}
         self._muted: set[tuple[str, str]] = set()  # (session code, user id) whose mic is muted
+        self._closing: set[asyncio.Task] = set()  # streams being flushed in the background
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
                   "agent_start", "agent_stop", "rename_speaker", "set_domain", "mute_mic")
         for name in events:
@@ -266,7 +267,10 @@ class SocketHandlers:
             self._stream_speakers.pop(key, None)
             stream = self._streams.pop(key, None)
             if stream is not None:
-                await stream.close()
+                # Flushing the open sentence can take ~0.5 s (Deepgram); answer the mute at once.
+                task = asyncio.create_task(stream.close())
+                self._closing.add(task)
+                task.add_done_callback(self._closing.discard)
         else:
             self._muted.discard(key)
         return {"ok": True}
