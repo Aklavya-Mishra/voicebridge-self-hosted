@@ -17,6 +17,11 @@ export const domainText = (domain: Domain, detected: string | null): string =>
 /** Newest first; a hint already shown (same id) is replaced, not repeated. */
 export const addHint = (hints: NbaHint[], hint: NbaHint): NbaHint[] => [hint, ...hints.filter((h) => h.id !== hint.id)]
 
+/** The live panel shows only the newest hints, so the advisor reads one or two, not a list. */
+export const MAX_VISIBLE_HINTS = 2
+
+export const visibleHints = (hints: NbaHint[]): NbaHint[] => hints.slice(0, MAX_VISIBLE_HINTS)
+
 export const hintsNewestFirst = (hints: NbaHint[]): NbaHint[] => [...hints].sort((a, b) => b.ts - a.ts)
 
 /** "current_plan" -> "Current plan"; short keys such as "os" -> "OS". */

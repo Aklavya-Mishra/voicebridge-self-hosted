@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { addHint, domainText, factLabel, hintsNewestFirst } from '../src/lib/assist.ts'
+import { addHint, domainText, factLabel, hintsNewestFirst, visibleHints } from '../src/lib/assist.ts'
 import type { NbaHint } from '../src/lib/types.ts'
 
 const hint = (id: string, ts: number, text = `hint ${id}`): NbaHint => ({
@@ -42,4 +42,11 @@ test('call type text', () => {
   assert.equal(domainText('auto', null), 'Detecting call type…')
   assert.equal(domainText('auto', 'telecom'), 'Telecom · detected')
   assert.equal(domainText('tech_support', null), 'Tech support')
+})
+
+test('the live panel shows at most the two newest hints', () => {
+  assert.deepEqual(
+    visibleHints([hint('c', 3), hint('b', 2), hint('a', 1)]).map((h) => h.id),
+    ['c', 'b'],
+  )
 })

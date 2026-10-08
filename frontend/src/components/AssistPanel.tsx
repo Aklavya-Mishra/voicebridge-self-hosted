@@ -1,4 +1,4 @@
-import { DOMAIN_OPTIONS, domainText, factLabel } from '../lib/assist'
+import { DOMAIN_OPTIONS, domainText, factLabel, visibleHints } from '../lib/assist'
 import type { Domain, NbaHint, NbaStatusEvent } from '../lib/types'
 
 interface Props {
@@ -31,7 +31,7 @@ export function AssistPanel({ domain, detected, hints, facts, status, reason, on
         <p className="notice small">AI hints unavailable ({reason}). Rule hints still work.</p>
       )}
       <h3>Next best action</h3>
-      <HintList hints={hints} />
+      <HintList hints={visibleHints(hints)} />
       <h3>Customer info</h3>
       <FactList facts={facts} />
     </aside>

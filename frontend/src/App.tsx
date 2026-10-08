@@ -119,7 +119,7 @@ export default function App() {
           )}
         </div>
       </header>
-      <main>
+      <main className={view.name === 'call' && auth ? 'wide' : undefined}>
         {!auth ? (
           <Login onLogin={signIn} />
         ) : view.name === 'call' ? (

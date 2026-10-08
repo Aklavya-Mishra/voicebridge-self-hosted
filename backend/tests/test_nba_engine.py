@@ -160,3 +160,8 @@ async def test_sensitive_values_in_fact_keys_are_masked():
     state = NbaState(domain="telecom")
     await run_turn(state, LINES, FakeLLM(answer(facts=[{"key": "card 4111 1111 1111 1111", "value": "visa"}])), SETTINGS)
     assert not any(c.isdigit() for key in state.facts for c in key)
+
+
+def test_prompt_says_hints_and_facts_come_only_from_the_customer():
+    system, _, _ = build_prompt(NbaState(), LINES, None)
+    assert "only from the customer's lines" in system

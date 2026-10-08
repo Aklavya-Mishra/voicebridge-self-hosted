@@ -189,3 +189,29 @@ async def test_slow_model_is_reported():
     await service.on_final(code, say(store, code, "a", "hello"))
     await service.drain(code)
     assert named(events, "nba_status")[-1] == {"code": code, "state": "unavailable", "reason": "model too slow (over 0.05 s)"}
+
+
+async def test_my_earlier_talk_is_not_sent_as_context():
+    """Seen live: 8 advisor lines then 'I want to renew my sales contract' gave a hint about the advisor's topic."""
+    llm = FakeLLM(answer())
+    service, store, code, _ = make(llm)
+    for n in range(5):
+        say(store, code, f"me{n}", f"Deepgram chunking breaks, my own topic {n}", caller=False)
+    say(store, code, "me5", "Let's end this conversation for now.", caller=False)
+    await service.on_final(code, say(store, code, "c1", "So I want to renew my sales contract."))
+    await service.drain(code)
+    user = llm.calls[-1][1]
+    assert "my own topic" not in user
+    assert "advisor (Aklavya): Let's end this conversation for now." in user  # the line just before is kept
+    assert "customer (Computer): So I want to renew my sales contract." in user
+
+
+async def test_my_replies_after_the_caller_spoke_stay_in_context():
+    llm = FakeLLM(answer())
+    service, store, code, _ = make(llm)
+    say(store, code, "c1", "My internet is down.")
+    say(store, code, "me1", "Which area are you in?", caller=False)
+    await service.on_final(code, say(store, code, "c2", "Baner in Pune."))
+    await service.drain(code)
+    user = llm.calls[-1][1]
+    assert "advisor (Aklavya): Which area are you in?" in user and "customer (Computer): My internet is down." in user

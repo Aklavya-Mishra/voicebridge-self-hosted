@@ -159,6 +159,10 @@ main {
   margin: 0 auto;
   padding: 1.5rem 16px;
 }
+/* A live call uses the whole width: Assist panel (40%) and transcript (60%). */
+main.wide {
+  max-width: 1440px;
+}
 
 .card {
   background: var(--surface);
@@ -541,7 +545,7 @@ main {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); /* Assist 40% | transcript 60% */
   gap: 0.75rem;
 }
 .call-body.solo {
@@ -637,5 +641,8 @@ main {
   }
   .call-body .chat {
     height: 60vh;
+  }
+  .call-body .assist {
+    order: 2; /* transcript first on a phone */
   }
 }

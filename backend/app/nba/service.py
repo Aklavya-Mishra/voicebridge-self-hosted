@@ -83,9 +83,13 @@ class NbaService:
     async def _turn(self, code: str) -> None:
         state = self._state(code)
         session = self._store.get(code)
+        window = session.transcript[-self._settings.nba_context_lines:]
+        # The advisor's talk before the caller first speaks in this window is not about the caller: keep only
+        # the line just before (the question being answered), or the model takes the advisor's topic.
+        first = next((i for i, u in enumerate(window) if is_call_speaker(u.speaker_id)), 0)
         lines = [
             Line("customer" if is_call_speaker(u.speaker_id) else "advisor", u.speaker_name, u.text)
-            for u in session.transcript[-self._settings.nba_context_lines:]
+            for u in window[max(first - 1, 0):]
         ]
         await self._status(code, "thinking")
         try:

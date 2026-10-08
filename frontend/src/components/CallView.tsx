@@ -287,12 +287,6 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
       {status === 'connecting' && <p className="muted">Connecting…</p>}
 
       <div className={nbaEnabled ? 'call-body' : 'call-body solo'}>
-        <Chat
-          messages={sorted}
-          myId={me.id}
-          originTs={originTs}
-          emptyHint={recording ? 'Listening… start talking.' : 'Start your mic to transcribe your side of the call.'}
-        />
         {nbaEnabled && (
           <AssistPanel
             domain={domain}
@@ -304,6 +298,12 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
             onDomainChange={changeDomain}
           />
         )}
+        <Chat
+          messages={sorted}
+          myId={me.id}
+          originTs={originTs}
+          emptyHint={recording ? 'Listening… start talking.' : 'Start your mic to transcribe your side of the call.'}
+        />
       </div>
 
       {leaveOpen && (
