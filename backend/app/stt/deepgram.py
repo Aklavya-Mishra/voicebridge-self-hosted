@@ -50,7 +50,6 @@ class DeepgramSTT:
             "channels": "1",
             "interim_results": "true",
             "endpointing": str(s.deepgram_endpointing_ms),
-            "utterance_end_ms": "1000",
         }
         return f"{s.deepgram_url}?{urlencode(params)}"
 
