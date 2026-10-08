@@ -30,10 +30,17 @@ class OllamaLLM:
 
     name = "ollama"
 
-    def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        transport: httpx.AsyncBaseTransport | None = None,
+        *,
+        model: str | None = None,
+        num_ctx: int | None = None,
+    ):
         self._url = settings.ollama_url.rstrip("/") + "/api/chat"
-        self._model = settings.llm_model
-        self._options = {"temperature": 0, "num_ctx": settings.llm_num_ctx}
+        self._model = model or settings.llm_model
+        self._options = {"temperature": 0, "num_ctx": num_ctx or settings.llm_num_ctx}
         if settings.llm_cpu_only:
             self._options["num_gpu"] = 0  # no layers on the GPU
         self._transport = transport

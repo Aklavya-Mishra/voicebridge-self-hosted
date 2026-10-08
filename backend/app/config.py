@@ -53,6 +53,15 @@ class Settings:
     llm_num_ctx: int = 16384  # tokens of context: about an hour of call
     llm_cpu_only: bool = True
     gemini_model: str = "gemini-2.5-flash-lite"
+    # Live next-best-action hints (app.nba): local Ollama only, never a cloud model.
+    nba_enabled: bool = False  # from_env turns it on
+    nba_model: str = "qwen2.5:7b"  # set from the CPU benchmark (tools/bench_nba.py)
+    nba_num_ctx: int = 4096  # small context keeps CPU latency down
+    nba_context_lines: int = 8  # transcript lines sent per turn
+    nba_timeout_s: float = 30.0  # a slower turn is dropped
+    nba_phrase_match: int = 88  # fuzzy score (0-100) for phrase rules
+    nba_dedupe: int = 90  # similarity above which a new hint repeats an earlier one
+    nba_absent_after: int = 4  # customer lines before "fact missing" rules may fire
     whisper_model: str = "base"  # tiny | base | small | medium | large-v3 (bigger = more accurate, slower)
     whisper_device: str = "cpu"  # cpu | cuda
     whisper_compute_type: str = "int8"  # int8 on CPU; float16 on GPU
@@ -102,6 +111,14 @@ class Settings:
             llm_num_ctx=int(env("LLM_NUM_CTX", cls.llm_num_ctx)),
             llm_cpu_only=_bool(env("LLM_CPU_ONLY", "true")),
             gemini_model=env("GEMINI_MODEL", cls.gemini_model),
+            nba_enabled=_bool(env("NBA_ENABLED", "true")),
+            nba_model=env("NBA_MODEL", cls.nba_model),
+            nba_num_ctx=int(env("NBA_NUM_CTX", cls.nba_num_ctx)),
+            nba_context_lines=int(env("NBA_CONTEXT_LINES", cls.nba_context_lines)),
+            nba_timeout_s=float(env("NBA_TIMEOUT_S", cls.nba_timeout_s)),
+            nba_phrase_match=int(env("NBA_PHRASE_MATCH", cls.nba_phrase_match)),
+            nba_dedupe=int(env("NBA_DEDUPE", cls.nba_dedupe)),
+            nba_absent_after=int(env("NBA_ABSENT_AFTER", cls.nba_absent_after)),
             whisper_model=env("WHISPER_MODEL", cls.whisper_model),
             whisper_device=env("WHISPER_DEVICE", cls.whisper_device),
             whisper_compute_type=env("WHISPER_COMPUTE_TYPE", cls.whisper_compute_type),

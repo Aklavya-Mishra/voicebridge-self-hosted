@@ -267,3 +267,16 @@ async def test_summary_text_is_masked_too(tmp_path):
     summary = store.get(code).summary
     assert summary["summary"] == "Rahul Verma paid with card xxxxx, expiry xxxxx."
     assert summary["action_items"] == ["Email the ticket to xxxxx"]
+
+
+async def test_ollama_model_and_context_can_be_overridden():
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": "{}"}})
+
+    llm = OllamaLLM(Settings(), transport=httpx.MockTransport(handler), model="qwen2.5:3b", num_ctx=4096)
+    await llm.json("s", "u", {"type": "object"})
+    assert seen["model"] == "qwen2.5:3b"
+    assert seen["options"]["num_ctx"] == 4096 and seen["options"]["num_gpu"] == 0
