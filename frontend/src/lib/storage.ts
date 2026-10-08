@@ -72,3 +72,23 @@ export function saveDomain(domain: Domain): void {
     // ignore
   }
 }
+
+const CONSENT_KEY = 'voicebridge.consented'
+
+/** Whether the recording notice was already agreed to for this call: it is shown once per call. */
+export function hasConsented(code: string): boolean {
+  try {
+    return (JSON.parse(localStorage.getItem(CONSENT_KEY) ?? '[]') as string[]).includes(code)
+  } catch {
+    return false
+  }
+}
+
+export function saveConsent(code: string): void {
+  try {
+    const codes = (JSON.parse(localStorage.getItem(CONSENT_KEY) ?? '[]') as string[]).filter((c) => c !== code)
+    localStorage.setItem(CONSENT_KEY, JSON.stringify([...codes, code].slice(-50)))
+  } catch {
+    // ignore
+  }
+}

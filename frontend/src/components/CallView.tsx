@@ -3,6 +3,7 @@ import { io, type Socket } from 'socket.io-client'
 import { API_BASE } from '../lib/api'
 import { addHint, hintsNewestFirst } from '../lib/assist'
 import { MicCapture } from '../lib/mic'
+import { hasConsented, saveConsent } from '../lib/storage'
 import { formatTranscript } from '../lib/transcript'
 import {
   fromUtterance,
@@ -46,6 +47,9 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
   const [levels, setLevels] = useState<number[]>([])
   const [agentOnline, setAgentOnline] = useState(false)
   const [viaAgent, setViaAgent] = useState(false)
+  // With the agent, Stop mic only mutes my side; the other person keeps being transcribed.
+  const [muted, setMuted] = useState(false)
+  const [consented, setConsented] = useState(() => hasConsented(code))
   const [copied, setCopied] = useState(false)
   // Speakers whose transcription fell back from Deepgram to the local engine: id -> name.
   const [localEngine, setLocalEngine] = useState<Map<string, string>>(new Map())
@@ -143,8 +147,21 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
     }
   }, [code, callName, token, upsert, onAuthExpired])
 
-  const startMic = async () => {
+  const agree = () => {
     setConsentOpen(false)
+    setConsented(true)
+    saveConsent(code)
+  }
+
+  /** The recording notice is shown once per call; after that Start mic starts right away. */
+  const requestStart = () => {
+    if (!consented) setConsentOpen(true)
+    else if (agentOnline) void startAgent()
+    else void startMic()
+  }
+
+  const startMic = async () => {
+    agree()
     setError('')
     const mic = new MicCapture()
     try {
@@ -164,7 +181,7 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
   }
 
   const startAgent = async () => {
-    setConsentOpen(false)
+    agree()
     setError('')
     const ack = await socketRef.current?.emitWithAck('agent_start', { code })
     if (!ack?.ok) {
@@ -172,13 +189,24 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
       return
     }
     setViaAgent(true)
+    setMuted(false)
     setRecording(true)
+  }
+
+  const setMicMuted = async (next: boolean) => {
+    const ack = await socketRef.current?.emitWithAck('mute_mic', { code, muted: next })
+    if (!ack?.ok) {
+      setError(ack?.error ?? 'Could not change the microphone')
+      return
+    }
+    setMuted(next)
   }
 
   const stopMic = async () => {
     if (viaAgent) {
       await socketRef.current?.emitWithAck('agent_stop', { code })
       setViaAgent(false)
+      setMuted(false)
     } else {
       await micRef.current?.stop()
       micRef.current = null
@@ -253,12 +281,22 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
           )}
         </div>
         <div className="call-actions">
-          {recording ? (
+          {recording && viaAgent ? (
+            muted ? (
+              <button className="primary" onClick={() => setMicMuted(false)}>
+                Unmute mic
+              </button>
+            ) : (
+              <button className="danger" onClick={() => setMicMuted(true)}>
+                <span className="rec-dot" /> Mute mic
+              </button>
+            )
+          ) : recording ? (
             <button className="danger" onClick={stopMic}>
               <span className="rec-dot" /> Stop mic
             </button>
           ) : (
-            <button className="primary" onClick={() => setConsentOpen(true)} disabled={status !== 'joined'}>
+            <button className="primary" onClick={requestStart} disabled={status !== 'joined'}>
               Start mic
             </button>
           )}
@@ -279,6 +317,9 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
           </div>
         ))}
       {error && <p className="error">{error}</p>}
+      {recording && viaAgent && muted && (
+        <p className="notice">Your mic is muted. The other person is still being transcribed.</p>
+      )}
       {[...localEngine].map(([id, name]) => (
         <p key={id} className="notice">
           Deepgram unavailable for {id === me.id ? 'you' : name} — using local transcription.

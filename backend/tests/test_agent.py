@@ -136,3 +136,58 @@ async def test_leaving_the_call_stops_the_agent(server):
     assert await wait_for(lambda: agent.stopped == [code])
     await agent.client.disconnect()
     await web.disconnect()
+
+
+async def test_muting_my_mic_keeps_transcribing_the_other_person(server):
+    """Stop mic with the agent mutes only my side: the call audio is still transcribed."""
+    web_token, user = await login(server, "Aklavya")
+    code = await new_session(server, web_token)
+    web, events = await connect(server, web_token)
+    assert (await web.call("join_session", {"code": code}))["ok"]
+    agent = FakeAgent()
+    await agent.connect(server, web_token)
+    assert await wait_for(lambda: statuses(events) and statuses(events)[-1]["online"])
+    assert (await web.call("agent_start", {"code": code})) == {"ok": True}
+
+    assert (await web.call("mute_mic", {"code": code, "muted": True})) == {"ok": True}
+    # Both sides speak; only the call side may be transcribed.
+    for chunk in chunks(stereo(tone(1.0) + silence(3.5), silence(1.5) + tone(1.0) + silence(2.0)), chunk_s=0.05):
+        await agent.client.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+
+    def finals():
+        return [d for kind, d in events if kind == "transcript" and d["final"] and d["text"]]
+
+    assert await wait_for(lambda: len(finals()) >= 1)
+    await asyncio.sleep(0.5)
+    assert [d["speaker"]["id"] for d in finals()] == [f"{user['id']}-call"]
+    assert agent.stopped == []  # the agent keeps recording
+
+    # Unmuted again: my side is transcribed too.
+    assert (await web.call("mute_mic", {"code": code, "muted": False})) == {"ok": True}
+    for chunk in chunks(stereo(tone(1.0) + silence(1.0), silence(2.0)), chunk_s=0.05):
+        await agent.client.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+    assert await wait_for(lambda: user["id"] in [d["speaker"]["id"] for d in finals()])
+
+    assert (await web.call("mute_mic", {"code": "ZZZZZZ", "muted": True}))["ok"] is False
+    await agent.client.disconnect()
+    await web.disconnect()
+
+
+async def test_muting_mid_sentence_saves_what_i_already_said(server):
+    web_token, user = await login(server, "Aklavya")
+    code = await new_session(server, web_token)
+    web, events = await connect(server, web_token)
+    assert (await web.call("join_session", {"code": code}))["ok"]
+    agent = FakeAgent()
+    await agent.connect(server, web_token)
+    assert await wait_for(lambda: statuses(events) and statuses(events)[-1]["online"])
+    assert (await web.call("agent_start", {"code": code})) == {"ok": True}
+    for chunk in chunks(stereo(tone(1.0), silence(1.0)), chunk_s=0.05):  # no pause yet: sentence still open
+        await agent.client.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+    await asyncio.sleep(0.2)
+    assert (await web.call("mute_mic", {"code": code, "muted": True})) == {"ok": True}
+    assert await wait_for(
+        lambda: any(kind == "transcript" and d["final"] and d["text"] and d["speaker"]["id"] == user["id"] for kind, d in events)
+    )
+    await agent.client.disconnect()
+    await web.disconnect()

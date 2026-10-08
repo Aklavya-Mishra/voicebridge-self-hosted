@@ -58,7 +58,9 @@ npm run dev                     # http://localhost:5173
    ```
 
    Each line carries the name its speaker was recorded with.
-5. **Leave** asks for confirmation; it also stops the agent's recording for that call.
+5. With the desktop agent, **Mute mic** stops transcribing only your side; the other person is still
+   transcribed. **Unmute mic** brings your side back. The recording notice is shown once per call.
+   **Leave** asks for confirmation; it also stops the agent's recording for that call.
 6. Every call is saved as it happens (each finished sentence) in `backend/data/voicebridge.db` (SQLite;
    `DB_PATH` changes the location). **Past calls** on the home page lists them, newest first; opening one
    shows its summary and transcript (`Name: text`, one line per sentence) with a Back button.

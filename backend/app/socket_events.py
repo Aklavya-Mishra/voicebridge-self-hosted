@@ -10,6 +10,8 @@ Client -> server: join_session {code, name?}, rename_speaker {code, speaker_id, 
 Desktop agent (connects with auth {token, client: "agent"} using the web UI's token, handed over locally;
 one per user):
   web -> server: agent_start {code} -> ack {ok, error?}; agent_stop {code} -> ack {ok}
+  web -> server: mute_mic {code, muted} -> ack {ok, error?}: while muted the agent's mic channel is dropped
+  (what was said before is saved); the call audio keeps being transcribed.
   server -> agent: start_recording {code} -> ack {ok, error?}; stop_recording {code}
   server -> web: agent_status {online}
   The agent streams stereo audio_chunk (mic + speaker loopback) only into sessions it was started for.
@@ -89,8 +91,9 @@ class SocketHandlers:
         self._agent_codes: dict[str, set[str]] = {}  # user id -> sessions the agent is recording
         # The speaker dict each live stream reads its name from; a rename updates it in place.
         self._stream_speakers: dict[tuple[str, str], dict] = {}
+        self._muted: set[tuple[str, str]] = set()  # (session code, user id) whose mic is muted
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
-                  "agent_start", "agent_stop", "rename_speaker", "set_domain")
+                  "agent_start", "agent_stop", "rename_speaker", "set_domain", "mute_mic")
         for name in events:
             sio.on(name, getattr(self, name))
 
@@ -184,6 +187,9 @@ class SocketHandlers:
             return
         mic, call = split_stereo(bytes(audio))
         ts = self._chunk_ts(key, len(mic))  # one clock for both channels: they were captured together
+        if key in self._muted:  # my mic is muted: only the other person is transcribed
+            await self._stream_for(code, self._call_speaker(code, user)).push(call, ts)
+            return
         await asyncio.gather(
             self._stream_for(code, user).push(mic, ts),
             self._stream_for(code, self._call_speaker(code, user)).push(call, ts),
@@ -248,9 +254,27 @@ class SocketHandlers:
     def _stream_for(self, code: str, speaker: dict) -> LiveStream:
         return self._streams.get((code, speaker["id"])) or self._new_stream(code, speaker)
 
+    async def mute_mic(self, sid: str, data: dict) -> dict:
+        state = await self._sio.get_session(sid)
+        code = normalize_code((data or {}).get("code"))
+        if code not in state["codes"]:
+            return {"ok": False, "error": "Join the session first"}
+        key = (code, state["user"]["id"])
+        if (data or {}).get("muted"):
+            self._muted.add(key)
+            # Save what was said so far; a new stream starts when the mic is unmuted.
+            self._stream_speakers.pop(key, None)
+            stream = self._streams.pop(key, None)
+            if stream is not None:
+                await stream.close()
+        else:
+            self._muted.discard(key)
+        return {"ok": True}
+
     async def _leave(self, sid: str, state: dict, code: str) -> None:
         state["codes"].discard(code)
         if not state.get("agent"):
+            self._muted.discard((code, state["user"]["id"]))
             # The web UI owns the call: when it leaves, the agent stops recording for it.
             await self._stop_agent(state["user"]["id"], code)
         await self._close_stream(code, state["user"]["id"])
