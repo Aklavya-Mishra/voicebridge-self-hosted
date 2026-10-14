@@ -140,7 +140,6 @@ export default function App() {
           <Home
             token={auth.token}
             defaultName={auth.user.name}
-            nbaEnabled={nbaEnabled}
             onOpenCall={(code, callName) => setView({ name: 'call', code, callName })}
             onOpenTranscript={(code) => setView({ name: 'transcript', code })}
             onImport={() => setView({ name: 'import' })}

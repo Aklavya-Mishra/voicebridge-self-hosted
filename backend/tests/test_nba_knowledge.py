@@ -1,4 +1,4 @@
-"""Domain packs: the four shipped packs load, broken packs are rejected."""
+"""Domain packs: the five shipped packs load, broken packs are rejected."""
 import json
 
 import pytest
@@ -22,11 +22,13 @@ def minimal(**over) -> dict:
     return raw
 
 
-def test_all_four_domains_load():
-    assert set(DOMAINS) == {"sales", "marketing", "telecom", "tech_support"}
+def test_all_five_domains_load():
+    assert set(DOMAINS) == {"general", "sales", "marketing", "telecom", "tech_support"}
     for pack in PACKS.values():
         assert any(i.name == "general" for i in pack.intents)
-        assert pack.facts and pack.phrase_rules and pack.fact_rules
+        assert pack.facts
+        # General (greetings, thanks) is answered from its guidance; the topic packs have rules.
+        assert pack.domain == "general" or (pack.phrase_rules and pack.fact_rules)
 
 
 def test_minimal_pack_parses():

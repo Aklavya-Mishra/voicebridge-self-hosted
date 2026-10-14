@@ -1,7 +1,6 @@
 """Socket.IO events for live sessions.
 
 Client -> server: join_session {code, name?}, rename_speaker {code, speaker_id, name} -> ack {ok, error?},
-  set_domain {code, domain} -> ack {ok, error?} (call type for live hints),
   audio_chunk {code, audio, channels?}, stop_audio {code}, leave_session {code}
   audio is PCM16 at the configured sample rate. channels=2 means interleaved stereo from one endpoint:
   left = the user's mic, right = the call audio (the remote person, who does not run VoiceBridge).
@@ -13,13 +12,15 @@ one per user):
   web -> server: mute_mic {code, muted} -> ack {ok, error?}: while muted the agent's mic channel is dropped
   (what was said before is saved); the call audio keeps being transcribed.
   server -> agent: start_recording {code} -> ack {ok, error?}; stop_recording {code}
+  agent -> server: agent_ping {code|null} every few seconds and on each (re)connect: re-registers the agent and
+  the call it records after a reconnect.
   server -> web: agent_status {online}
   The agent streams stereo audio_chunk (mic + speaker loopback) only into sessions it was started for.
 Server -> client: participants {code, participants}, transcript {...see pipeline payload},
                   stt_status {code, speaker, engine, reason} when a speaker falls back to local STT,
                   speaker_renamed {code, speaker_id, name},
                   live hints (app.nba): nba_hint {code, id, text, kind, intent, priority, ts},
-                  nba_facts {code, facts}, nba_domain {code, domain, auto}, nba_status {code, state, reason?}
+                  nba_facts {code, facts}, nba_domain {code, domain}, nba_status {code, state, reason?}
 """
 import asyncio
 import logging
@@ -94,7 +95,7 @@ class SocketHandlers:
         self._muted: set[tuple[str, str]] = set()  # (session code, user id) whose mic is muted
         self._closing: set[asyncio.Task] = set()  # streams being flushed in the background
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
-                  "agent_start", "agent_stop", "rename_speaker", "set_domain", "mute_mic")
+                  "agent_start", "agent_stop", "agent_ping", "rename_speaker", "mute_mic")
         for name in events:
             sio.on(name, getattr(self, name))
 
@@ -124,6 +125,32 @@ class SocketHandlers:
             del self._agents[user_id]
             self._agent_codes.pop(user_id, None)
             await self._sio.emit("agent_status", {"online": False}, room=user_room(user_id))
+
+    async def agent_ping(self, sid: str, data: dict) -> None:
+        """The agent's heartbeat. After a reconnect it is a new connection: register it again and give it back
+        the call it is still recording, or its audio (the other person) would be dropped."""
+        state = await self._sio.get_session(sid)
+        if not state.get("agent"):
+            return
+        user_id = state["user"]["id"]
+        if self._agents.get(user_id) != sid:
+            old = self._agents.get(user_id)
+            if old is not None and self._sio.manager.is_connected(old, "/"):
+                return  # another agent of this user is live; it keeps the role
+            self._agents[user_id] = sid
+            logger.info("Desktop agent registered again for user %s", user_id)
+            await self._sio.emit("agent_status", {"online": True}, room=user_room(user_id))
+        code = normalize_code((data or {}).get("code"))
+        if not code or code in state["codes"]:
+            return
+        try:
+            session = self._store.get(code)
+        except SessionError:
+            return
+        if user_id in session.participants:
+            state["codes"].add(code)
+            self._agent_codes.setdefault(user_id, set()).add(code)
+            logger.info("Desktop agent resumed recording session %s", code)
 
     async def agent_start(self, sid: str, data: dict) -> dict:
         state = await self._sio.get_session(sid)
@@ -166,6 +193,8 @@ class SocketHandlers:
         except SessionError as exc:
             return {"ok": False, "error": str(exc)}
         state["codes"].add(session.code)
+        if self._nba is not None:
+            self._nba.warm()  # the caller may speak soon: have the hint prompt cached by then
         await self._sio.enter_room(sid, room_for(session.code))
         await self._broadcast_participants(session.code)
         return {"ok": True, "session": session.to_dict()}
@@ -237,19 +266,6 @@ class SocketHandlers:
             "speaker_renamed", {"code": code, "speaker_id": speaker_id, "name": name}, room=room_for(code)
         )
         await self._broadcast_participants(code)
-        return {"ok": True}
-
-    async def set_domain(self, sid: str, data: dict) -> dict:
-        state = await self._sio.get_session(sid)
-        code = normalize_code((data or {}).get("code"))
-        if code not in state["codes"]:
-            return {"ok": False, "error": "Join the session first"}
-        if self._nba is None:
-            return {"ok": False, "error": "Live hints are turned off"}
-        try:
-            await self._nba.set_domain(code, str((data or {}).get("domain") or ""))
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
         return {"ok": True}
 
     def _stream_for(self, code: str, speaker: dict) -> LiveStream:
@@ -377,6 +393,8 @@ class SocketHandlers:
             if any(c == code for c, _ in self._streams):
                 return  # recording again; analysed when it stops
             await analyse_session(self._store, code, self._llm)
+            if self._nba is not None:
+                self._nba.warm()  # the summary replaced the cached hint prompt in a local model
 
         task = asyncio.create_task(run())
         self._analysis[code] = task

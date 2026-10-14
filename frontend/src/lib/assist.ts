@@ -1,18 +1,17 @@
-import type { Domain, NbaData, NbaHint } from './types'
+import type { NbaData, NbaHint } from './types'
 
-export const DOMAIN_OPTIONS: { value: Domain; label: string }[] = [
-  { value: 'auto', label: 'Auto (detect)' },
-  { value: 'sales', label: 'Sales' },
-  { value: 'marketing', label: 'Marketing' },
-  { value: 'telecom', label: 'Telecom' },
-  { value: 'tech_support', label: 'Tech support' },
-]
+/** Call types the backend detects from the caller's latest line (backend/app/nba/knowledge). */
+const DOMAIN_LABELS: Record<string, string> = {
+  general: 'General',
+  sales: 'Sales',
+  marketing: 'Marketing',
+  telecom: 'Telecom',
+  tech_support: 'Tech support',
+}
 
-const label = (domain: string) => DOMAIN_OPTIONS.find((o) => o.value === domain)?.label ?? domain
-
-/** The call type as shown in the Assist panel. */
-export const domainText = (domain: Domain, detected: string | null): string =>
-  domain !== 'auto' ? label(domain) : detected ? `${label(detected)} · detected` : 'Detecting call type…'
+/** The call type as shown in the Assist panel; it follows the topic of the call. */
+export const domainText = (detected: string | null): string =>
+  detected ? `Call type: ${DOMAIN_LABELS[detected] ?? detected}` : 'Detecting call type…'
 
 /** Newest first; a hint already shown (same id) is replaced, not repeated. */
 export const addHint = (hints: NbaHint[], hint: NbaHint): NbaHint[] => [hint, ...hints.filter((h) => h.id !== hint.id)]

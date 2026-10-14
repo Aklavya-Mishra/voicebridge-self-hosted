@@ -1,7 +1,7 @@
 {
   "domain": "tech_support",
   "label": "Tech support",
-  "description": "Technical support for computers, devices, printers, software, apps and accounts: errors, setup, performance and access.",
+  "description": "Technical support for computers, devices, printers, software, apps and accounts: errors, setup, performance and access. Not the phone or internet provider's network or plan (that is telecom).",
   "intents": [
     {"name": "device_not_working", "description": "Hardware does not power on, crashes, overheats or a part fails.", "guidance": "Ask the model and what changed recently; start with the simplest check (power, cables, restart) before advanced steps.", "priority": "suggestion"},
     {"name": "software_error", "description": "An app or the operating system shows an error, freezes or crashes.", "guidance": "Ask for the exact error text and when it appears; give one step at a time and check the result before the next.", "priority": "suggestion"},
@@ -9,7 +9,7 @@
     {"name": "account_access", "description": "Login problems, forgotten password, locked account or two-factor issues.", "guidance": "Verify identity per policy before changing anything and use the official reset flow; never ask for the password.", "priority": "alert"},
     {"name": "performance", "description": "The device or an app is slow, laggy, or low on storage or memory.", "guidance": "Ask since when and what is running at the time; check startup apps, free storage and pending updates.", "priority": "suggestion"},
     {"name": "setup_install", "description": "Installing, configuring or updating software or a new device.", "guidance": "Confirm the device and OS version, then give the next single setup step.", "priority": "suggestion"},
-    {"name": "general", "description": "Anything else: greetings, verification or unclear lines.", "guidance": "Suggest the next useful question that pins down the device and the problem.", "priority": "suggestion"}
+    {"name": "general", "description": "Anything else about this topic that fits no intent above: verification or an unclear line about it (greetings, thanks and goodbyes are general.*).", "guidance": "Suggest the next useful question that pins down the device and the problem.", "priority": "suggestion"}
   ],
   "facts": [
     {"key": "customer_name", "description": "The customer's name"},

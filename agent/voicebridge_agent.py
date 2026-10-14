@@ -28,6 +28,9 @@ DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "VoiceBridge"
 DEFAULT_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 SEND_INTERVAL_S = 0.05
 LEVEL_LOG_INTERVAL_S = 10.0
+# The agent tells the server every few seconds that it is here and which call it records. After a reconnect
+# the server would otherwise not know either, and the other person's audio would be dropped.
+HEARTBEAT_INTERVAL_S = 5.0
 FROZEN = getattr(sys, "frozen", False)  # running as the PyInstaller .exe
 
 logger = logging.getLogger("voicebridge-agent")
@@ -99,6 +102,7 @@ class Agent:
         self._capture: Capture | None = None
         self._sender: asyncio.Task | None = None
         self._code: str | None = None
+        self._heartbeat: asyncio.Task | None = None
         self._on_change = on_change
 
     def status(self) -> dict:
@@ -109,8 +113,12 @@ class Agent:
         self._on_change("Recording" if s["recording"] else "Connected" if s["connected"] else "Waiting for the web app")
 
     async def connect(self, server: str, token: str) -> None:
-        """Called when the web app hands over its sign-in. Reconnects only if something changed."""
-        if self._target == (server, token) and self._sio and self._sio.connected:
+        """Called when the web app hands over its sign-in (every few seconds). Reconnects only if something changed.
+
+        A dropped connection is not a change: the client reconnects by itself and keeps recording. Starting a
+        second connection here stopped the recording, and the two connections then took turns pushing each
+        other off the server, which dropped the other person's audio."""
+        if self._target == (server, token) and self._sio:
             return
         self._target = (server, token)
         asyncio.create_task(self._reconnect(server, token))
@@ -121,11 +129,19 @@ class Agent:
         if self._sio:
             await self._sio.disconnect()
         sio = socketio.AsyncClient(reconnection=True)
-        sio.on("connect", lambda: (logger.info("Connected to %s", server), self._announce()))
+
+        async def on_connect() -> None:
+            logger.info("Connected to %s", server)
+            self._announce()
+            await self._ping(sio)  # a reconnect: tell the server at once which call is being recorded
+
+        sio.on("connect", on_connect)
         sio.on("disconnect", lambda *a: self._announce())
         sio.on("start_recording", self._start_recording)
         sio.on("stop_recording", self._stop_recording)
         self._sio = sio
+        if self._heartbeat is None or self._heartbeat.done():
+            self._heartbeat = asyncio.create_task(self._beat())
         try:
             await sio.connect(server, auth={"token": token, "client": "agent"}, transports=["websocket"])
         except socketio.exceptions.ConnectionError as exc:
@@ -134,6 +150,8 @@ class Agent:
         self._announce()
 
     async def _start_recording(self, data: dict) -> dict:
+        if self._code and self._code == data.get("code") and self._sender and not self._sender.done():
+            return {"ok": True}  # asked again after a reconnect: keep recording
         if self._code:
             await self._finish()
         try:
@@ -144,7 +162,7 @@ class Agent:
             self._capture = None
             return {"ok": False, "error": f"Agent could not open audio devices: {exc}"}
         self._code = data["code"]
-        self._sender = asyncio.create_task(self._send(self._sio, self._code))
+        self._sender = asyncio.create_task(self._send(self._code))
         logger.info("Recording for session %s", self._code)
         self._announce()
         return {"ok": True}
@@ -160,20 +178,42 @@ class Agent:
             sender.cancel()
         if capture:
             capture.stop()
-            for chunk in capture.mixer.chunks():
-                await sio.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+            if sio and sio.connected:
+                for chunk in capture.mixer.chunks():
+                    await sio.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
         if sio and sio.connected:
             await sio.emit("stop_audio", {"code": code})
         logger.info("Stopped recording for session %s", code)
         self._announce()
 
-    async def _send(self, sio: socketio.AsyncClient, code: str) -> None:
+    async def _ping(self, sio: socketio.AsyncClient) -> None:
+        try:
+            await sio.emit("agent_ping", {"code": self._code})
+        except Exception as exc:  # not connected right now; the next beat tries again
+            logger.debug("Heartbeat not sent: %s", exc)
+
+    async def _beat(self) -> None:
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL_S)
+            sio = self._sio
+            if sio and sio.connected:
+                await self._ping(sio)
+
+    async def _send(self, code: str) -> None:
         capture = self._capture
         since_log = 0.0
         while True:
             await asyncio.sleep(SEND_INTERVAL_S)
-            for chunk in capture.mixer.chunks():
-                await sio.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+            chunks = capture.mixer.chunks()
+            sio = self._sio
+            # While the connection is down the audio is dropped; sending must not stop for good.
+            if sio and sio.connected:
+                for chunk in chunks:
+                    try:
+                        await sio.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+                    except Exception as exc:
+                        logger.warning("Audio not sent: %s", exc)
+                        break
             since_log += SEND_INTERVAL_S
             if since_log >= LEVEL_LOG_INTERVAL_S:
                 mic, call = capture.peaks

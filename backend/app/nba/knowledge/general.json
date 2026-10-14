@@ -1,0 +1,17 @@
+{
+  "domain": "general",
+  "label": "General",
+  "description": "Greetings, how are you, small talk, thanks and goodbyes, checking the line (can you hear me), or a request that fits none of the other domains.",
+  "intents": [
+    {"name": "greeting", "description": "The customer says hello, asks how the advisor is, or makes small talk.", "guidance": "Greet them back ('I am good, thank you') and ask how you can help them today.", "priority": "suggestion"},
+    {"name": "line_check", "description": "The customer checks the line: can you hear me, are you there, hello?", "guidance": "Confirm you can hear them clearly and ask how you can help.", "priority": "suggestion"},
+    {"name": "thanks_goodbye", "description": "The customer thanks the advisor or says goodbye, also at the end of a sales, support or any other topic.", "guidance": "Thank them and close politely ('Thank you for calling, have a great day!'); restate any next step that was agreed.", "priority": "suggestion"},
+    {"name": "general", "description": "A request or question that fits none of the other domains, or is not clear yet.", "guidance": "Ask one short open question to understand what the customer needs.", "priority": "suggestion"}
+  ],
+  "facts": [
+    {"key": "customer_name", "description": "The customer's name"},
+    {"key": "need", "description": "What the customer wants, in a few words"}
+  ],
+  "phrase_rules": [],
+  "fact_rules": []
+}

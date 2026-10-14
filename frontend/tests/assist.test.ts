@@ -39,9 +39,10 @@ test('fact keys read as words', () => {
 })
 
 test('call type text', () => {
-  assert.equal(domainText('auto', null), 'Detecting call type…')
-  assert.equal(domainText('auto', 'telecom'), 'Telecom · detected')
-  assert.equal(domainText('tech_support', null), 'Tech support')
+  assert.equal(domainText(null), 'Detecting call type…')
+  assert.equal(domainText('telecom'), 'Call type: Telecom')
+  assert.equal(domainText('general'), 'Call type: General')
+  assert.equal(domainText('tech_support'), 'Call type: Tech support')
 })
 
 test('the live panel shows at most the two newest hints', () => {

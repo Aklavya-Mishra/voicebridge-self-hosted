@@ -1,4 +1,4 @@
-"""Call type and hints are saved with the call, survive a restart and follow speaker renames."""
+"""The detected call type and hints are saved with the call, survive a restart and follow speaker renames."""
 import sqlite3
 from dataclasses import replace
 
@@ -13,10 +13,10 @@ ME = {"id": "u1", "name": "Aklavya"}
 HINT = {"id": "h1", "text": "Ask Computer for the area.", "kind": "ai", "intent": None, "priority": "suggestion", "ts": 1.0}
 
 
-def test_new_calls_default_to_auto_with_nothing_saved():
+def test_new_calls_start_with_no_call_type_and_nothing_saved():
     s = SessionStore().create(ME)
-    assert s.domain == "auto" and s.nba == {"hints": [], "facts": {}, "detected": None, "fact_log": {}}
-    assert s.to_dict()["domain"] == "auto" and s.to_dict()["nba"] == s.nba
+    assert s.nba == {"hints": [], "facts": {}, "detected": None, "fact_log": {}, "domain_since": 0}
+    assert s.to_dict()["nba"] == s.nba and "domain" not in s.to_dict()
 
 
 def test_call_side_speaker_is_recognised():
@@ -26,16 +26,13 @@ def test_call_side_speaker_is_recognised():
 def test_domain_and_hints_survive_a_restart(tmp_path):
     db = str(tmp_path / "vb.db")
     store = SessionStore(db_path=db)
-    s = store.create(ME, domain="telecom")
-    nba = {"hints": [HINT], "facts": {"issue": "no internet"}, "detected": None}
+    s = store.create(ME)
+    nba = {"hints": [HINT], "facts": {"issue": "no internet"}, "detected": "telecom", "domain_since": 2}
     store.set_nba(s.code, nba)
-    again = SessionStore(db_path=db).get(s.code)
-    assert again.domain == "telecom" and again.nba == {**nba, "fact_log": {}}
-    store.set_domain(s.code, "sales")
-    assert SessionStore(db_path=db).get(s.code).domain == "sales"
+    assert SessionStore(db_path=db).get(s.code).nba == {**nba, "fact_log": {}}
 
 
-def test_database_from_before_hints_loads_as_auto(tmp_path):
+def test_database_from_before_hints_loads(tmp_path):
     db = tmp_path / "old.db"
     conn = sqlite3.connect(db)
     conn.executescript(
@@ -45,7 +42,7 @@ def test_database_from_before_hints_loads_as_auto(tmp_path):
     )
     conn.close()
     s = SessionStore(db_path=str(db)).get("ABC234")
-    assert s.domain == "auto" and s.nba == {"hints": [], "facts": {}, "detected": None, "fact_log": {}}
+    assert s.nba == {"hints": [], "facts": {}, "detected": None, "fact_log": {}, "domain_since": 0}
 
 
 def test_renaming_the_caller_updates_saved_hints_in_place():
@@ -66,13 +63,27 @@ async def client(settings):
         yield c
 
 
-async def test_create_a_call_with_a_call_type(client):
+def test_database_with_a_picked_call_type_still_loads(tmp_path):
+    """Databases from when the call type was picked by hand have a `domain` column; it is ignored."""
+    db = tmp_path / "picked.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        "CREATE TABLE sessions (code TEXT PRIMARY KEY, id TEXT NOT NULL, kind TEXT NOT NULL, created_by TEXT NOT NULL,"
+        " created_at REAL NOT NULL, participants TEXT NOT NULL, summary TEXT, speaker_names TEXT, domain TEXT, nba TEXT);"
+        """INSERT INTO sessions VALUES ('ABC234', 'id1', 'live', 'u1', 1.0, '{"u1": "Aklavya"}', NULL, '{}', 'sales',"""
+        """ '{"hints": [], "facts": {}, "detected": null}');"""
+    )
+    conn.close()
+    store = SessionStore(db_path=str(db))
+    store.set_nba("ABC234", {**store.get("ABC234").nba, "detected": "general"})
+    assert SessionStore(db_path=str(db)).get("ABC234").nba["detected"] == "general"
+
+
+async def test_create_a_call(client):
     token = (await client.post("/api/auth/login", json={"name": "Aklavya"})).json()["token"]
     h = {"Authorization": f"Bearer {token}"}
-    made = await client.post("/api/sessions", headers=h, json={"domain": "tech_support"})
-    assert made.json()["session"]["domain"] == "tech_support"
-    assert (await client.post("/api/sessions", headers=h)).json()["session"]["domain"] == "auto"
-    assert (await client.post("/api/sessions", headers=h, json={"domain": "cooking"})).status_code == 422
+    made = (await client.post("/api/sessions", headers=h)).json()["session"]
+    assert made["nba"]["detected"] is None and "domain" not in made
 
 
 async def test_health_says_whether_hints_are_on(settings):

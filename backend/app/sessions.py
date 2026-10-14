@@ -55,7 +55,7 @@ def is_call_speaker(speaker_id: str) -> bool:
 
 def empty_nba() -> dict:
     """Live hint state of a call (app.nba): hints shown, customer facts, domain found in auto mode."""
-    return {"hints": [], "facts": {}, "detected": None, "fact_log": {}}
+    return {"hints": [], "facts": {}, "detected": None, "fact_log": {}, "domain_since": 0}
 
 
 @dataclass
@@ -84,8 +84,7 @@ class Session:
     # Names given to speakers who are not participants, e.g. the call audio ("<user id>-call") renamed from
     # "Computer" to the caller's real name.
     speaker_names: dict[str, str] = field(default_factory=dict)
-    # Call type for live hints: auto or a domain (app.nba.knowledge), and the hints and facts shown so far.
-    domain: str = "auto"
+    # Live hints (app.nba): the call type found from the caller's latest line, the hints and facts shown so far.
     nba: dict = field(default_factory=empty_nba)
 
     def to_dict(self) -> dict:
@@ -99,7 +98,6 @@ class Session:
             "transcript": [u.to_dict() for u in self.transcript],
             "summary": self.summary,
             "speaker_names": self.speaker_names,
-            "domain": self.domain,
             "nba": self.nba,
         }
 
@@ -120,7 +118,8 @@ CREATE TABLE IF NOT EXISTS utterances (
 CREATE INDEX IF NOT EXISTS utterances_by_code ON utterances(code, start_ts);
 """
 # Columns added after the first release; created on databases that predate them.
-_ADDED_COLUMNS = {"sessions": [("summary", "TEXT"), ("speaker_names", "TEXT"), ("domain", "TEXT"), ("nba", "TEXT")]}
+# Older databases also have a `domain` column (the call type picked by hand, since removed); it is not read.
+_ADDED_COLUMNS = {"sessions": [("summary", "TEXT"), ("speaker_names", "TEXT"), ("nba", "TEXT")]}
 
 
 class _Db:
@@ -138,12 +137,12 @@ class _Db:
     def save_session(self, s: "Session") -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO sessions"
-            " (code, id, kind, created_by, created_at, participants, summary, speaker_names, domain, nba)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " (code, id, kind, created_by, created_at, participants, summary, speaker_names, nba)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 s.code, s.id, s.kind, s.created_by, s.created_at, json.dumps(s.participants),
                 json.dumps(s.summary) if s.summary is not None else None, json.dumps(s.speaker_names),
-                s.domain, json.dumps(s.nba),
+                json.dumps(s.nba),
             ),
         )
 
@@ -155,7 +154,7 @@ class _Db:
 
     def load(self) -> list["Session"]:
         rows = self._conn.execute(
-            "SELECT code, id, kind, created_by, created_at, participants, summary, speaker_names, domain, nba"
+            "SELECT code, id, kind, created_by, created_at, participants, summary, speaker_names, nba"
             " FROM sessions"
         )
         sessions = {
@@ -163,10 +162,9 @@ class _Db:
                 id=sid, code=code, kind=kind, created_by=by, created_at=at, participants=json.loads(people),
                 summary=json.loads(summary) if summary else None,
                 speaker_names=json.loads(names) if names else {},
-                domain=domain or "auto",
                 nba={**empty_nba(), **json.loads(nba)} if nba else empty_nba(),
             )
-            for code, sid, kind, by, at, people, summary, names, domain, nba in rows
+            for code, sid, kind, by, at, people, summary, names, nba in rows
         }
         rows = self._conn.execute(
             "SELECT id, code, speaker_id, speaker_name, text, start_ts, end_ts FROM utterances ORDER BY start_ts"
@@ -206,7 +204,7 @@ class SessionStore:
             if code not in self._sessions:
                 return code
 
-    def create(self, user: dict, kind: str = "live", domain: str = "auto") -> Session:
+    def create(self, user: dict, kind: str = "live") -> Session:
         session = Session(
             id=uuid.uuid4().hex,
             code=self._new_code(),
@@ -214,7 +212,6 @@ class SessionStore:
             created_by=user["id"],
             created_at=time.time(),
             participants={user["id"]: user["name"]},
-            domain=domain,
         )
         self._sessions[session.code] = session
         self._save(session)
@@ -322,11 +319,6 @@ class SessionStore:
     def set_summary(self, code: str, summary: dict | None) -> None:
         session = self.get(code)
         session.summary = summary
-        self._save(session)
-
-    def set_domain(self, code: str, domain: str) -> None:
-        session = self.get(code)
-        session.domain = domain
         self._save(session)
 
     def set_nba(self, code: str, nba: dict) -> None:

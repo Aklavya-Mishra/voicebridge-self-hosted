@@ -2,8 +2,8 @@
 
     .venv/Scripts/python tools/bench_nba.py qwen2.5:3b qwen2.5:7b
 
-For each model and sample call: one warm-up turn (loads the model), then one turn per customer line in auto
-mode, printing seconds per turn, the detected domain, facts and hint.
+For each model and sample call: one warm-up turn (loads the model), then one turn per customer line (the call
+type follows each line), printing seconds per turn, the detected domain, facts and hint.
 """
 import asyncio
 import sys
@@ -50,7 +50,7 @@ async def bench(model: str) -> None:
             result = await run_turn(state, lines[:n], llm, settings)
             times.append(time.perf_counter() - started)
             hint = result.hint["text"] if result.hint else "(none)"
-            print(f"[{name}] {times[-1]:5.1f}s domain={state.active_domain} facts={state.facts} hint={hint}")
+            print(f"[{name}] {times[-1]:5.1f}s domain={state.detected} facts={state.facts} hint={hint}")
         print(f"[{name}] average {sum(times) / len(times):.1f}s per turn")
 
 

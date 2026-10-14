@@ -1,31 +1,23 @@
-import { DOMAIN_OPTIONS, domainText, factLabel, visibleHints } from '../lib/assist'
-import type { Domain, NbaHint, NbaStatusEvent } from '../lib/types'
+import { domainText, factLabel, visibleHints } from '../lib/assist'
+import type { NbaHint, NbaStatusEvent } from '../lib/types'
 
 interface Props {
-  domain: Domain
+  /** Call type detected from the caller's latest line; null until they first speak. */
   detected: string | null
   hints: NbaHint[]
   facts: Record<string, string>
   status: NbaStatusEvent['state']
   reason?: string
-  onDomainChange: (domain: Domain) => void
 }
 
 /** Live hints for the advisor (newest first) and what the customer has told so far. */
-export function AssistPanel({ domain, detected, hints, facts, status, reason, onDomainChange }: Props) {
+export function AssistPanel({ detected, hints, facts, status, reason }: Props) {
   return (
     <aside className="assist card" aria-label="Call assist">
       <div className="assist-head">
         <h2>Assist</h2>
-        <select aria-label="Call type" value={domain} onChange={(e) => onDomainChange(e.target.value as Domain)}>
-          {DOMAIN_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
       </div>
-      <p className="muted small">{domainText(domain, detected)}</p>
+      <p className="muted small">{domainText(detected)}</p>
       {status === 'thinking' && <p className="muted small">Thinking…</p>}
       {status === 'unavailable' && (
         <p className="notice small">AI hints unavailable ({reason}). Rule hints still work.</p>

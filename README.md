@@ -68,7 +68,10 @@ npm run dev                     # http://localhost:5173
    are never shown or saved in clear. When a call stops, it is analysed in the background (seconds on a
    cloud model, ~15-25 s for a short call on CPU): summary, purpose, outcome, action items and the caller's
    sentiment, plus masking of what patterns miss (expiry dates, CVVs, addresses,
-   numbers read out in words). People's names are never masked.
+   numbers read out in words). People's names are never masked. The sentiment is rated in a second short
+   request (~1-3 s) from the caller's lines only (the call audio; in a call between two VoiceBridge users or an
+   import, the person who did not start it), so a polite advisor does not soften an upset caller; a call where
+   the caller never spoke has none.
 
 ### Call analysis: which model
 
@@ -92,16 +95,23 @@ they said (plan, device, budget, issue...). Hints are newest first; the latest i
 an instant hint from a rule, and alerts (cancellation, price objection, escalation...) have an orange edge.
 Hints and Customer info are saved with the call and shown again under its summary in **Past calls**.
 
-- **Call type**: pick Sales, Marketing, Telecom or Tech support when you start a session, or leave **Auto**
-  to detect it from the first lines. It can be changed from the panel at any time. Auto can mislabel close
-  types (a CRM sales call was detected as marketing in testing), so pick the type when you know it.
+- **Call type**: never picked by hand, and no keywords decide it: the model detects it, with the hint, from
+  each line of the other person, and the panel shows it (`Call type: Telecom`). When they change topic (a
+  telecom issue, then a sales contract) it follows; a short reply to your question ("Yes.", "Baner, Pune.")
+  keeps it. **General** covers greetings, thanks and goodbyes ("Hi, how are you?" gave "I am good, thank
+  you. How can I assist you today?"), and any line the model places in no other type. Close types can
+  still be mislabelled (sales vs marketing).
 - Only the other person's lines trigger hints; calls between two VoiceBridge users get none.
 - Each call type is one JSON file in `backend/app/nba/knowledge/`: intents with guidance for the advisor,
   facts to collect, and rules (phrases said, facts present, missing or equal to a value). Edit them to tune
   the hints; the backend checks them at start.
 - Model: local `qwen2.5:7b` through Ollama on the CPU (`NBA_MODEL`), free, nothing leaves the PC; cloud keys
-  are never used for hints. Measured on this PC: about 6-7 s per hint once a call is under way, about 11 s
-  for the first hint after the call type is known; rule hints are instant. `python tools/bench_nba.py
+  are never used for hints. Every call type's guidance is in one fixed prompt (~2,400 tokens): read fresh it
+  takes ~20 s on CPU, cached by Ollama ~0.5 s. Ollama drops that cache when it unloads the model (after
+  `OLLAMA_KEEP_ALIVE`, 60m here; Ollama's default is 5m) or runs another prompt (the call summary), so the
+  backend has the model read it again in the background at start, when a call is joined and after each
+  summary. Measured on this PC: about 4-9 s per hint; up to ~28 s only when the caller speaks within ~20 s
+  of such a warm-up starting (`NBA_TIMEOUT_S`, 60 s, covers it). Rule hints are instant. `python tools/bench_nba.py
   <model>` (in `backend/`) times a model on two sample calls.
 - When Ollama is not running (or the model is not pulled), the panel says so and rule hints keep working.
   `NBA_ENABLED=false` turns live hints off.

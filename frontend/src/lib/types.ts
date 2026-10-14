@@ -23,8 +23,6 @@ export interface Session {
   summary: CallSummary | null
   /** Names given to speakers who are not participants, e.g. "<user id>-call" renamed from "Computer". */
   speaker_names?: Record<string, string>
-  /** Call type for live hints. */
-  domain?: Domain
   nba?: NbaData
 }
 
@@ -39,7 +37,7 @@ export type CallSummary =
       purpose: string
       action_items: string[]
       outcome: string
-      sentiment: 'positive' | 'neutral' | 'negative'
+      sentiment: 'positive' | 'neutral' | 'negative' | null
     }
 
 /** Server `transcript` event. A final with empty text means "drop this bubble". */
@@ -91,9 +89,6 @@ export const fromUtterance = (u: Utterance): ChatMessage => ({
   final: true,
 })
 
-/** Call type for live hints; 'auto' lets the backend detect it from the first lines. */
-export type Domain = 'auto' | 'sales' | 'marketing' | 'telecom' | 'tech_support'
-
 /** A live hint for the advisor: from a pack rule (instant) or from the local model. */
 export interface NbaHint {
   id: string
@@ -113,11 +108,10 @@ export interface NbaData {
   fact_log?: Record<string, string[]>
 }
 
-/** Server `nba_domain` event: the call type in use (null while auto has not detected one). */
+/** Server `nba_domain` event: the call type detected from the caller's latest line. */
 export interface NbaDomainEvent {
   code: string
   domain: string | null
-  auto: boolean
 }
 
 /** Server `nba_status` event. */

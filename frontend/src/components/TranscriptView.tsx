@@ -72,7 +72,9 @@ function SummaryBlock({ summary }: { summary: CallSummary | null }) {
   return (
     <section className="summary-box" aria-label="Call summary">
       <div className="summary-tags">
-        <span className={`pill sentiment-${summary.sentiment}`}>Sentiment: {summary.sentiment}</span>
+        {summary.sentiment && (
+          <span className={`pill sentiment-${summary.sentiment}`}>Sentiment: {summary.sentiment}</span>
+        )}
       </div>
       <p>{summary.summary}</p>
       <dl>

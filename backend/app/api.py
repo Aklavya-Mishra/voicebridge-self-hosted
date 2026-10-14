@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from app.analysis import analyse_session, mask_text
 from app.auth import AuthError, issue_token, verify_token
 from app.importer import OTHER_SPEAKER_ID, OTHER_SPEAKER_NAME, ImportRejected, transcribe_stereo
-from app.nba.knowledge import DOMAINS
 from app.sessions import SessionError
 
 router = APIRouter(prefix="/api")
@@ -56,18 +55,9 @@ def list_sessions(request: Request, user: dict = Depends(current_user)) -> dict:
     return {"sessions": request.app.state.store.list_for(user["id"])}
 
 
-class CreateSessionRequest(BaseModel):
-    domain: str = "auto"
-
-
 @router.post("/sessions")
-def create_session(
-    request: Request, body: CreateSessionRequest | None = None, user: dict = Depends(current_user)
-) -> dict:
-    domain = body.domain if body else "auto"
-    if domain != "auto" and domain not in DOMAINS:
-        raise HTTPException(status_code=422, detail="Unknown call type")
-    return {"session": request.app.state.store.create(user, domain=domain).to_dict()}
+def create_session(request: Request, user: dict = Depends(current_user)) -> dict:
+    return {"session": request.app.state.store.create(user).to_dict()}
 
 
 @router.get("/sessions/{code}")

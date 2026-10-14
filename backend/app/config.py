@@ -50,6 +50,9 @@ class Settings:
     anthropic_model: str = "claude-opus-5-5"
     llm_model: str = "qwen2.5:7b"  # local Ollama model
     ollama_url: str = "http://127.0.0.1:11434"
+    # How long Ollama keeps the model in memory after a request (Ollama's default is 5m). Unloading also drops the
+    # cached hint prompt, which takes ~20 s on CPU to read again.
+    ollama_keep_alive: str = "60m"
     llm_num_ctx: int = 16384  # tokens of context: about an hour of call
     llm_cpu_only: bool = True
     gemini_model: str = "gemini-2.5-flash-lite"
@@ -58,7 +61,8 @@ class Settings:
     nba_model: str = "qwen2.5:7b"  # set from the CPU benchmark (tools/bench_nba.py)
     nba_num_ctx: int = 4096  # small context keeps CPU latency down
     nba_context_lines: int = 8  # transcript lines sent per turn
-    nba_timeout_s: float = 30.0  # a slower turn is dropped
+    # A slower turn is dropped. It includes waiting behind a warm-up (app.nba.service.warm, ~20 s on CPU).
+    nba_timeout_s: float = 60.0
     nba_phrase_match: int = 88  # fuzzy score (0-100) for phrase rules
     nba_dedupe: int = 90  # similarity above which a new hint repeats an earlier one
     nba_absent_after: int = 4  # customer lines before "fact missing" rules may fire
@@ -108,6 +112,7 @@ class Settings:
             anthropic_model=env("ANTHROPIC_MODEL", cls.anthropic_model),
             llm_model=env("LLM_MODEL", cls.llm_model),
             ollama_url=env("OLLAMA_URL", cls.ollama_url),
+            ollama_keep_alive=env("OLLAMA_KEEP_ALIVE", cls.ollama_keep_alive),
             llm_num_ctx=int(env("LLM_NUM_CTX", cls.llm_num_ctx)),
             llm_cpu_only=_bool(env("LLM_CPU_ONLY", "true")),
             gemini_model=env("GEMINI_MODEL", cls.gemini_model),

@@ -1,7 +1,7 @@
 {
   "domain": "telecom",
   "label": "Telecom",
-  "description": "Calls to a phone, mobile or internet provider: plans, billing, outages, upgrades, new connections, roaming and cancellation.",
+  "description": "Calls to a phone, mobile or internet provider: plans, billing, no signal or mobile data not working, outages, upgrades, new connections, roaming and cancellation.",
   "intents": [
     {"name": "billing_dispute", "description": "The customer questions a charge, a higher bill or a double payment.", "guidance": "Ask for the bill month and the amount in question, explain the charge if it is known, and offer a review instead of promising a refund.", "priority": "suggestion"},
     {"name": "plan_change", "description": "The customer wants to upgrade, downgrade or change a plan or data pack.", "guidance": "Ask about their usage (data, calls, roaming) and suggest the plan that fits; confirm price and start date only if known.", "priority": "suggestion"},
@@ -9,7 +9,7 @@
     {"name": "cancellation", "description": "The customer wants to cancel, port out or switch provider.", "guidance": "Ask the main reason first and address it if possible; then explain the process and any contract terms without pressure.", "priority": "alert"},
     {"name": "new_connection", "description": "The customer wants a new SIM, line, broadband connection or a move to a new address.", "guidance": "Confirm the address or area and the type of connection, then the documents needed.", "priority": "suggestion"},
     {"name": "roaming", "description": "Questions about using the phone abroad.", "guidance": "Ask the destination and travel dates and suggest activating a roaming pack before travel.", "priority": "suggestion"},
-    {"name": "general", "description": "Anything else: greetings, verification or unclear lines.", "guidance": "Suggest the next useful question that identifies the account and the customer's need.", "priority": "suggestion"}
+    {"name": "general", "description": "Anything else about this topic that fits no intent above: verification or an unclear line about it (greetings, thanks and goodbyes are general.*).", "guidance": "Suggest the next useful question that identifies the account and the customer's need.", "priority": "suggestion"}
   ],
   "facts": [
     {"key": "customer_name", "description": "The customer's name"},

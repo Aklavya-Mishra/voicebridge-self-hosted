@@ -257,7 +257,7 @@ main.wide {
   margin: 0.5rem 0;
   line-height: 1.5;
 }
-.summary-box dl {
+.summary-box dl:not(.facts) {
   margin: 0;
   display: grid;
   grid-template-columns: auto 1fr;
@@ -286,7 +286,7 @@ main.wide {
   border-color: var(--danger);
 }
 @media (max-width: 600px) {
-  .summary-box dl {
+  .summary-box dl:not(.facts) {
     grid-template-columns: 1fr;
   }
 }

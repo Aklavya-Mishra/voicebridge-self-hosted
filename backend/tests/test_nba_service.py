@@ -1,8 +1,11 @@
 """The hint service over a real session store with a fake model."""
+import asyncio
+
 import httpx
 import pytest
 
 from app.config import Settings
+from app.nba.engine import SYSTEM
 from app.nba.service import NbaService
 from app.sessions import SessionStore, Utterance
 from tests.test_nba_engine import FakeLLM, answer
@@ -11,9 +14,10 @@ ME = {"id": "u1", "name": "Aklavya"}
 SETTINGS = Settings(nba_enabled=True, nba_timeout_s=1.0)
 
 
-def make(llm, domain="telecom", store=None):
+def make(llm, detected="telecom", store=None):
     store = store or SessionStore()
-    code = store.create(ME, domain=domain).code
+    code = store.create(ME).code
+    store.get(code).nba["detected"] = detected
     events = []
 
     async def emit(c, event, payload):
@@ -78,7 +82,7 @@ async def test_missing_model_says_how_to_install_it():
             raise httpx.HTTPStatusError("404", request=request, response=httpx.Response(404, request=request))
 
     service, store, code, events = make(MissingLLM())
-    await service.on_final(code, say(store, code, "a", "hello"))
+    await service.on_final(code, say(store, code, "a", "my internet is down"))
     await service.drain(code)
     assert named(events, "nba_status")[-1] == {
         "code": code, "state": "unavailable", "reason": f"model not installed: ollama pull {SETTINGS.nba_model}",
@@ -87,33 +91,93 @@ async def test_missing_model_says_how_to_install_it():
 
 async def test_unreadable_model_answer_is_skipped():
     service, store, code, events = make(FakeLLM("not json"))
-    await service.on_final(code, say(store, code, "a", "hello there"))
+    await service.on_final(code, say(store, code, "a", "I have a question about my order"))
     await service.drain(code)
     assert named(events, "nba_status")[-1] == {"code": code, "state": "idle"}
     assert named(events, "nba_hint") == []
 
 
 async def test_auto_detection_emits_the_domain_and_then_rules_apply():
-    service, store, code, events = make(FakeLLM(answer(intent="general")), domain="auto")
+    service, store, code, events = make(FakeLLM(answer()), detected=None)
     await service.on_final(code, say(store, code, "a", "I want to cancel my plan"))
-    assert [h["id"] for h in named(events, "nba_hint")] == ["tel-cancel"]  # all packs' phrases while detecting
+    assert [h["id"] for h in named(events, "nba_hint")] == ["tel-cancel"]  # every pack's phrases apply
     await service.drain(code)
-    assert named(events, "nba_domain") == [{"code": code, "domain": "telecom", "auto": True}]
+    assert named(events, "nba_domain") == [{"code": code, "domain": "telecom"}]
     await service.on_final(code, say(store, code, "b", "there is no signal at home"))
     assert named(events, "nba_hint")[-1]["id"] == "tel-no-signal"
     await service.drain(code)
     assert store.get(code).nba["detected"] == "telecom"
 
 
-async def test_set_domain_switches_and_auto_clears_detection():
-    service, store, code, events = make(FakeLLM(answer()), domain="auto")
-    await service.set_domain(code, "sales")
-    assert store.get(code).domain == "sales"
-    assert named(events, "nba_domain")[-1] == {"code": code, "domain": "sales", "auto": False}
-    await service.set_domain(code, "auto")
-    assert named(events, "nba_domain")[-1] == {"code": code, "domain": None, "auto": True}
-    with pytest.raises(ValueError, match="Unknown call type"):
-        await service.set_domain(code, "cooking")
+async def test_auto_mode_switches_call_type_when_the_caller_changes_topic():
+    llm = FakeLLM(answer(hint=""))
+    service, store, code, events = make(llm, detected=None)
+    for n in range(4):
+        await service.on_final(code, say(store, code, f"t{n}", f"my internet is down {n}"))
+        await service.drain(code)
+    llm.result = answer(intent="sales.general", facts=[], hint="")
+    await service.on_final(code, say(store, code, "s1", "I want a sales contract for a new project"))
+    await service.drain(code)
+    assert named(events, "nba_domain")[-1] == {"code": code, "domain": "sales"}
+    assert store.get(code).nba["detected"] == "sales"
+    # "Missing" rules count the caller's lines since the switch, not since the call began.
+    assert not any(h["id"].startswith("sales-") for h in named(events, "nba_hint"))
+    for n in range(3):
+        await service.on_final(code, say(store, code, f"s{n + 2}", f"more about the project {n}"))
+        await service.drain(code)
+    assert "sales-budget-unknown" in [h["id"] for h in named(events, "nba_hint")]
+
+
+async def test_greeting_mid_call_switches_to_general():
+    llm = FakeLLM(answer(intent="general.greeting", facts=[], hint="I am good, thank you. How can I help you today?"))
+    service, store, code, events = make(llm)
+    await service.on_final(code, say(store, code, "a", "Hi, how are you?"))
+    await service.drain(code)
+    assert len(llm.calls) == 1  # the model decides, as for any line
+    assert named(events, "nba_domain") == [{"code": code, "domain": "general"}]
+    assert named(events, "nba_hint")[-1]["intent"] == "general.greeting"
+    assert store.get(code).nba["detected"] == "general"
+
+
+class WarmLLM(FakeLLM):
+    def __init__(self, *args, fail=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.warmed: list[str] = []
+        self.fail = fail
+
+    async def warm(self, system):
+        self.warmed.append(system)
+        await asyncio.sleep(0.05)
+        if self.fail:
+            raise httpx.ConnectError("refused")
+
+
+async def test_warm_has_the_model_read_the_fixed_prompt_once_at_a_time():
+    llm = WarmLLM(answer())
+    service, *_ = make(llm)
+    service.warm()
+    service.warm()  # already warming: not sent twice
+    await service._warming
+    assert llm.warmed == [SYSTEM]
+    service.warm()
+    await service._warming
+    assert len(llm.warmed) == 2
+
+
+async def test_warm_is_skipped_without_a_local_model_and_ignores_errors():
+    service, *_ = make(FakeLLM(answer()))
+    service.warm()  # a model without warm(): nothing to do
+    assert service._warming is None
+    failing, *_ = make(WarmLLM(answer(), fail=True))
+    failing.warm()
+    await failing._warming  # Ollama down: logged, never raised
+
+
+async def test_a_rule_from_another_call_type_still_fires():
+    """The call type can change on any line, so phrases of every pack are checked."""
+    service, store, code, events = make(FakeLLM(answer(hint="")), detected="sales")
+    await service.on_final(code, say(store, code, "a", "I want to cancel my plan"))
+    assert "tel-cancel" in [h["id"] for h in named(events, "nba_hint")]
 
 
 async def test_missing_fact_rule_fires_after_enough_customer_lines():
@@ -163,7 +227,7 @@ class DownLLM:
 
 
 async def test_auto_mode_still_gives_rule_hints_when_the_model_is_down():
-    service, store, code, events = make(DownLLM(), domain="auto")
+    service, store, code, events = make(DownLLM(), detected=None)
     await service.on_final(code, say(store, code, "a", "I want to cancel my plan"))
     await service.drain(code)
     assert [h["id"] for h in named(events, "nba_hint")] == ["tel-cancel"]
@@ -178,7 +242,7 @@ async def test_model_server_error_is_reported():
             raise httpx.HTTPStatusError("500", request=request, response=httpx.Response(500, request=request))
 
     service, store, code, events = make(BrokenLLM())
-    await service.on_final(code, say(store, code, "a", "hello"))
+    await service.on_final(code, say(store, code, "a", "my internet is down"))
     await service.drain(code)
     assert named(events, "nba_status")[-1] == {"code": code, "state": "unavailable", "reason": "local model error (HTTP 500)"}
 
@@ -186,7 +250,7 @@ async def test_model_server_error_is_reported():
 async def test_slow_model_is_reported():
     service, store, code, events = make(FakeLLM(answer(), delay=5))
     service._settings = Settings(nba_enabled=True, nba_timeout_s=0.05)
-    await service.on_final(code, say(store, code, "a", "hello"))
+    await service.on_final(code, say(store, code, "a", "my internet is down"))
     await service.drain(code)
     assert named(events, "nba_status")[-1] == {"code": code, "state": "unavailable", "reason": "model too slow (over 0.05 s)"}
 

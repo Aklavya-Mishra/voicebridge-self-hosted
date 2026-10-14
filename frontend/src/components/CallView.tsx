@@ -8,7 +8,6 @@ import { formatTranscript } from '../lib/transcript'
 import {
   fromUtterance,
   type ChatMessage,
-  type Domain,
   type NbaDomainEvent,
   type NbaHint,
   type NbaStatusEvent,
@@ -55,13 +54,17 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
   const [localEngine, setLocalEngine] = useState<Map<string, string>>(new Map())
   // Renamed speakers who are not participants (the call audio): id -> name.
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({})
-  const [domain, setDomain] = useState<Domain>('auto')
   const [detected, setDetected] = useState<string | null>(null)
   const [hints, setHints] = useState<NbaHint[]>([])
   const [facts, setFacts] = useState<Record<string, string>>({})
   const [nbaStatus, setNbaStatus] = useState<{ state: NbaStatusEvent['state']; reason?: string }>({ state: 'idle' })
   const socketRef = useRef<Socket | null>(null)
   const micRef = useRef<MicCapture | null>(null)
+  // Read by the socket's connect handler: after a reconnect the agent recording (and mute) is asked for again.
+  const agentRecordingRef = useRef({ viaAgent: false, muted: false })
+  useEffect(() => {
+    agentRecordingRef.current = { viaAgent, muted }
+  }, [viaAgent, muted])
 
   const upsert = useCallback((event: TranscriptEvent) => {
     setMessages((prev) => {
@@ -97,12 +100,16 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
       setOriginTs(session.created_at)
       setMessages(new Map(session.transcript.map((u) => [u.id, fromUtterance(u)])))
       setSpeakerNames(session.speaker_names ?? {})
-      setDomain(session.domain ?? 'auto')
       setDetected(session.nba?.detected ?? null)
       setHints(hintsNewestFirst(session.nba?.hints ?? []))
       setFacts(session.nba?.facts ?? {})
       setStatus('joined')
       setError('') // e.g. "Cannot reach the server" from before the connection recovered
+      // A dropped connection made the server stop the agent for this call: start it again.
+      if (agentRecordingRef.current.viaAgent) {
+        await socket.emitWithAck('agent_start', { code })
+        if (agentRecordingRef.current.muted) await socket.emitWithAck('mute_mic', { code, muted: true })
+      }
     })
     socket.on('connect_error', (err) => {
       if (err.message === 'unauthorized') onAuthExpired()
@@ -133,10 +140,7 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
     )
     socket.on('nba_hint', (hint: NbaHint) => setHints((prev) => addHint(prev, hint)))
     socket.on('nba_facts', (data: { facts: Record<string, string> }) => setFacts(data.facts))
-    socket.on('nba_domain', (data: NbaDomainEvent) => {
-      setDomain(data.auto ? 'auto' : ((data.domain ?? 'auto') as Domain))
-      setDetected(data.auto ? data.domain : null)
-    })
+    socket.on('nba_domain', (data: NbaDomainEvent) => setDetected(data.domain))
     socket.on('nba_status', (data: NbaStatusEvent) => setNbaStatus({ state: data.state, reason: data.reason }))
 
     return () => {
@@ -214,11 +218,6 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
     }
     setRecording(false)
     setLevels([])
-  }
-
-  const changeDomain = async (next: Domain) => {
-    const ack = await socketRef.current?.emitWithAck('set_domain', { code, domain: next })
-    if (!ack?.ok) setError(ack?.error ?? 'Could not change the call type')
   }
 
   const leave = async () => {
@@ -330,13 +329,11 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
       <div className={nbaEnabled ? 'call-body' : 'call-body solo'}>
         {nbaEnabled && (
           <AssistPanel
-            domain={domain}
             detected={detected}
             hints={hints}
             facts={facts}
             status={nbaStatus.state}
             reason={nbaStatus.reason}
-            onDomainChange={changeDomain}
           />
         )}
         <Chat

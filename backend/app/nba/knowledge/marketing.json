@@ -9,7 +9,7 @@
     {"name": "advertising_inquiry", "description": "The customer asks about advertising, sponsorship or promoting their business.", "guidance": "Ask about their goal, audience and budget before suggesting a package.", "priority": "suggestion"},
     {"name": "feedback_survey", "description": "Collecting opinions about a product, brand or campaign.", "guidance": "Ask one short, neutral question at a time and thank them for each answer; do not lead the answer.", "priority": "suggestion"},
     {"name": "not_interested", "description": "The person says they are not interested, busy, or asks not to be contacted.", "guidance": "Respect it: offer to update their contact preferences and end politely. Do not push.", "priority": "alert"},
-    {"name": "general", "description": "Anything else: greetings, small talk or unclear lines.", "guidance": "Suggest the next useful question that finds out what the person is interested in.", "priority": "suggestion"}
+    {"name": "general", "description": "Anything else about this topic that fits no intent above, or an unclear line about it (greetings, thanks and goodbyes are general.*).", "guidance": "Suggest the next useful question that finds out what the person is interested in.", "priority": "suggestion"}
   ],
   "facts": [
     {"key": "customer_name", "description": "The person's name"},

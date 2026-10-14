@@ -62,4 +62,5 @@ def create_app(
 
         nba = NbaService(store, settings, nba_llm, nba_emit)
     SocketHandlers(sio, store, settings, stt, llm, nba)
-    return socketio.ASGIApp(sio, other_asgi_app=api)
+    # At start, have the hint model read its fixed prompt (~20 s on CPU) before the first call needs it.
+    return socketio.ASGIApp(sio, other_asgi_app=api, on_startup=nba.warm if nba else None)

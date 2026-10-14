@@ -226,3 +226,36 @@ async def test_mute_answers_at_once_while_the_open_sentence_is_saved(server, mon
     )
     await agent.client.disconnect()
     await web.disconnect()
+
+
+async def test_agent_reconnect_resumes_the_call_it_records(server):
+    web_token, user = await login(server, "Aklavya")
+    code = await new_session(server, web_token)
+    web, events = await connect(server, web_token)
+    assert (await web.call("join_session", {"code": code}))["ok"]
+
+    agent = FakeAgent()
+    await agent.connect(server, web_token)
+    assert (await web.call("agent_start", {"code": code})) == {"ok": True}
+
+    # The connection drops and comes back as a new one, which the server knows nothing about.
+    await agent.client.disconnect()
+    assert await wait_for(lambda: statuses(events)[-1]["online"] is False)
+    agent = FakeAgent()
+    await agent.connect(server, web_token)
+    await agent.client.emit("agent_ping", {"code": code})
+    assert await wait_for(lambda: statuses(events)[-1]["online"])
+
+    # Its audio is accepted again: the other person (right channel) is transcribed.
+    await asyncio.sleep(0.2)
+    for chunk in chunks(stereo(silence(2.0), tone(1.0) + silence(1.0)), chunk_s=0.05):
+        await agent.client.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+    assert (await web.call("agent_stop", {"code": code})) == {"ok": True}
+    assert await wait_for(lambda: agent.stopped == [code])
+    await agent.client.emit("stop_audio", {"code": code})
+
+    def finals():
+        return [d for kind, d in events if kind == "transcript" and d["final"] and d["text"]]
+
+    assert await wait_for(lambda: [d["speaker"]["id"] for d in finals()] == [f"{user['id']}-call"])
+    await agent.client.disconnect()

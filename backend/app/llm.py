@@ -43,21 +43,32 @@ class OllamaLLM:
         self._options = {"temperature": 0, "num_ctx": num_ctx or settings.llm_num_ctx}
         if settings.llm_cpu_only:
             self._options["num_gpu"] = 0  # no layers on the GPU
+        self._keep_alive = settings.ollama_keep_alive
         self._transport = transport
 
     async def json(self, system: str, user: str, schema: dict) -> dict:
+        response = await self._chat(system, user, {"format": schema})
+        return json.loads(response["message"]["content"])
+
+    async def warm(self, system: str) -> None:
+        """Load the model and have it read `system` now: Ollama keeps that prompt cached, so a later request
+        starting with it skips reading it (a 2,400-token prompt takes ~20 s on CPU)."""
+        await self._chat(system, ".", {"options": {**self._options, "num_predict": 1}})
+
+    async def _chat(self, system: str, user: str, extra: dict) -> dict:
         body = {
             "model": self._model,
             "stream": False,
             "think": False,
-            "format": schema,
+            "keep_alive": self._keep_alive,
             "options": self._options,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            **extra,
         }
         async with httpx.AsyncClient(transport=self._transport, timeout=LOCAL_TIMEOUT_S) as client:
             response = await client.post(self._url, json=body)
             response.raise_for_status()
-            return json.loads(response.json()["message"]["content"])
+            return response.json()
 
 
 class GeminiLLM:

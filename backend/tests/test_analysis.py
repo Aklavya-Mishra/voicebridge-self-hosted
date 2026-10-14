@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from app.analysis import ANALYSIS_SCHEMA, analyse_session, apply_pii, mask_text
+from app.analysis import ANALYSIS_SCHEMA, SENTIMENT_SCHEMA, analyse_session, apply_pii, mask_text
 from app.config import Settings
 from app.llm import LlmChain, OllamaLLM, make_llm_chain
 from app.sessions import SessionStore, Utterance
@@ -46,16 +46,26 @@ def test_apply_pii_masks_listed_values_but_never_names():
 
 
 class FakeLLM:
-    def __init__(self, name, result=None, fail=False):
+    """Answers the summary request with `result` and the sentiment request with `sentiment`."""
+
+    def __init__(self, name, result=None, fail=False, sentiment="positive", sentiment_fails=False):
         self.name = name
         self.calls = 0
         self._result = result
         self._fail = fail
+        self._sentiment = sentiment
+        self._sentiment_fails = sentiment_fails
+        self.sentiment_input = None
 
     async def json(self, system, user, schema):
         self.calls += 1
         if self._fail:
             raise RuntimeError(f"{self.name} down")
+        if schema is SENTIMENT_SCHEMA:
+            self.sentiment_input = user
+            if self._sentiment_fails:
+                raise RuntimeError("sentiment down")
+            return {"sentiment": self._sentiment}
         return self._result
 
 
@@ -93,7 +103,6 @@ ANALYSIS = {
     "purpose": "Book a flight",
     "action_items": ["Email the ticket"],
     "outcome": "Booked",
-    "sentiment": "positive",
     "pii": ["09/28", "Rahul Verma"],
 }
 
@@ -282,6 +291,23 @@ async def test_ollama_model_and_context_can_be_overridden():
     assert seen["options"]["num_ctx"] == 4096 and seen["options"]["num_gpu"] == 0
 
 
+async def test_ollama_keeps_the_model_loaded_and_can_warm_a_prompt():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": "{}"}})
+
+    llm = OllamaLLM(Settings(ollama_keep_alive="45m"), transport=httpx.MockTransport(handler), num_ctx=4096)
+    await llm.json("s", "u", {"type": "object"})
+    await llm.warm("the fixed prompt")
+    assert [body["keep_alive"] for body in seen] == ["45m", "45m"]
+    warm = seen[1]
+    assert warm["messages"][0] == {"role": "system", "content": "the fixed prompt"}
+    assert warm["options"]["num_predict"] == 1 and warm["options"]["num_ctx"] == 4096  # same context: no reload
+    assert "format" not in warm
+
+
 async def test_a_sentiment_word_is_not_an_outcome(tmp_path):
     """Seen live: qwen2.5 wrote outcome 'Positive' while the sentiment was neutral, and the screens disagreed."""
     store, code = seeded_store(tmp_path)
@@ -291,6 +317,46 @@ async def test_a_sentiment_word_is_not_an_outcome(tmp_path):
 
 def test_schema_says_the_outcome_is_a_sentence_not_a_sentiment():
     assert "never a sentiment word" in ANALYSIS_SCHEMA["properties"]["outcome"]["description"]
+
+
+async def test_sentiment_is_rated_from_the_customers_lines_only(tmp_path):
+    """Seen live: given the whole call, the advisor's calm lines averaged a caller's threat to switch provider
+    down to neutral."""
+    store, code = seeded_store(tmp_path)
+    llm = FakeLLM("ollama", result=ANALYSIS, sentiment="negative")
+    await analyse_session(store, code, LlmChain([llm]))
+    # The call audio, without the advisor, and already masked.
+    assert llm.sentiment_input == "Rahul Verma here, card expiry xxxxx."
+    assert store.get(code).summary["sentiment"] == "negative"
+
+
+async def test_without_call_audio_the_customer_is_whoever_did_not_start_the_call(tmp_path):
+    """A call between two VoiceBridge users, or an import: the other person is the customer."""
+    store = SessionStore(db_path=str(tmp_path / "vb.db"))
+    code = store.create(ME).code
+    lines = [("u1", "Aklavya", "How can I help?"), ("u2", "Ben", "My bill is wrong again!")]
+    for i, (sid, name, text) in enumerate(lines):
+        store.add_utterance(code, Utterance(str(i), sid, name, text, float(i), i + 0.5))
+    llm = FakeLLM("ollama", result=ANALYSIS)
+    await analyse_session(store, code, LlmChain([llm]))
+    assert llm.sentiment_input == "My bill is wrong again!"
+
+
+async def test_no_sentiment_when_the_customer_never_spoke(tmp_path):
+    store = SessionStore(db_path=str(tmp_path / "vb.db"))
+    code = store.create(ME).code
+    store.add_utterance(code, Utterance("0", "u1", "Aklavya", "Testing the mic, one two.", 0.0, 0.5))
+    llm = FakeLLM("ollama", result=ANALYSIS)
+    await analyse_session(store, code, LlmChain([llm]))
+    assert llm.calls == 1 and llm.sentiment_input is None  # nobody to judge: no sentiment request
+    assert store.get(code).summary["sentiment"] is None
+
+
+async def test_a_failed_sentiment_keeps_the_summary(tmp_path):
+    store, code = seeded_store(tmp_path)
+    await analyse_session(store, code, LlmChain([FakeLLM("ollama", result=ANALYSIS, sentiment_fails=True)]))
+    summary = store.get(code).summary
+    assert summary["status"] == "ready" and summary["sentiment"] is None
 
 
 def test_next_steps_cover_promises_from_either_person():
