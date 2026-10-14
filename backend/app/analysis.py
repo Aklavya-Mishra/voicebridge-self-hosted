@@ -97,8 +97,12 @@ SYSTEM_PROMPT = (
     "numbers (also when spelled out in words); card expiry dates; CVVs; dates of birth; street addresses. "
     "Never list people's names, cities, travel dates, prices or booking references. Already masked values "
     "appear as xxxxx; do not list them. Never write sensitive values (card details, emails, phone numbers, "
-    "CVVs, expiry dates) in the summary, purpose, outcome or action items."
+    "CVVs, expiry dates) in the summary, purpose, outcome or action items. "
+    "Lines under 'Done during the call' were completed by the app during the call (e.g. a Jira ticket was "
+    "created): they are not action items; mention them in the summary or outcome when relevant."
 )
+# A next step about raising a ticket, dropped once the call has a created ticket (the model may still list it).
+_TICKET_ITEM = re.compile(r"\bjira\b|\b(raise|create|log|open|file|make)\w*\b.*\btickets?\b", re.IGNORECASE)
 
 
 def mask_text(text: str) -> str:
@@ -136,6 +140,19 @@ def transcript_text(session) -> str:
     return "\n".join(f"{name}: {text}" for name, text in lines)
 
 
+def created_tickets(session) -> list[dict]:
+    return [t for t in getattr(session, "tickets", None) or [] if t.get("status") == "created" and t.get("key")]
+
+
+def done_text(session) -> str:
+    """What the app completed during the call, appended to the transcript for the summary."""
+    tickets = created_tickets(session)
+    if not tickets:
+        return ""
+    lines = "\n".join(f'- Jira ticket {t["key"]} created: "{t["title"]}"' for t in tickets)
+    return f"\n\nDone during the call (already completed, not next steps):\n{lines}"
+
+
 def customer_lines(session) -> list[str]:
     """What the customer said: the call audio (the person on the other end), or, in a call without it (two
     VoiceBridge users, an import), what everyone but the person who started the call said."""
@@ -164,7 +181,7 @@ async def analyse_session(store: SessionStore, code: str, llm: LlmChain) -> None
     store.set_summary(code, {"status": "pending"})
     started = time.perf_counter()
     try:
-        result, provider = await llm.json(SYSTEM_PROMPT, transcript_text(session), ANALYSIS_SCHEMA)
+        result, provider = await llm.json(SYSTEM_PROMPT, transcript_text(session) + done_text(session), ANALYSIS_SCHEMA)
     except Exception:
         logger.exception("Call analysis failed for session %s", code)
         store.set_summary(code, {"status": "unavailable"})
@@ -188,5 +205,11 @@ async def analyse_session(store: SessionStore, code: str, llm: LlmChain) -> None
     summary["action_items"] = [
         clean(a) for a in result.get("action_items") or [] if a and str(a).strip().lower() not in ("none", "n/a")
     ]
+    tickets = created_tickets(session)
+    if tickets:
+        # Raising the ticket is done, not a next step; the record says which ticket it is.
+        summary["action_items"] = [a for a in summary["action_items"] if not _TICKET_ITEM.search(a)]
+        if summary["outcome"] == "No clear outcome" or not summary["outcome"].strip():
+            summary["outcome"] = "Jira ticket " + ", ".join(t["key"] for t in tickets) + " created"
     store.set_summary(code, {"status": "ready", "provider": provider, "created_at": time.time(), **summary})
     logger.info("Analysed session %s with %s in %.1fs", code, provider, time.perf_counter() - started)

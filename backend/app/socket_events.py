@@ -160,6 +160,9 @@ class SocketHandlers:
             return {"ok": False, "error": str(exc)}
         if ticket["status"] == "failed":
             return {"ok": False, "error": ticket.get("error"), "ticket": ticket}
+        if ticket["status"] == "created" and self._store.get(code).summary is not None:
+            # Created after the call was summarised: summarise again, so the record shows the ticket as done.
+            self._schedule_analysis(code)
         return {"ok": True, "ticket": ticket}
 
     async def agent_ping(self, sid: str, data: dict) -> None:

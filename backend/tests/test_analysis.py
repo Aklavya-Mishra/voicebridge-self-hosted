@@ -366,3 +366,51 @@ def test_next_steps_cover_promises_from_either_person():
     description = ANALYSIS_SCHEMA["properties"]["action_items"]["description"]
     assert "either person" in description and "follow-up" in description
     assert "either person" in SYSTEM_PROMPT
+
+
+def created_ticket(key="SCRUM-7", title="Invoice download crashes on Android after update", status="created"):
+    return {"id": key, "status": status, "title": title, "description": "", "requested_by": "Computer",
+            "trigger": "raise a Jira ticket", "ts": 1.0, "key": key if status == "created" else None}
+
+
+class RecordingLLM(FakeLLM):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.summary_input = None
+
+    async def json(self, system, user, schema):
+        if schema is ANALYSIS_SCHEMA:
+            self.summary_input = user
+        return await super().json(system, user, schema)
+
+
+async def test_created_ticket_is_done_not_a_next_step(tmp_path):
+    store, code = seeded_store(tmp_path)
+    store.set_tickets(code, [created_ticket(), created_ticket("x", "Dismissed one", status="dismissed")])
+    result = dict(ANALYSIS, outcome="No clear outcome", pii=[], action_items=[
+        "Aklavya will raise a Jira ticket for the invoice download crash on Android.",
+        "Create a ticket for the crash",
+        "Email the ticket",  # a travel ticket, not a request to raise one
+        "Call the customer back on Friday",
+    ])
+    llm = RecordingLLM("ollama", result=result)
+    await analyse_session(store, code, LlmChain([llm]))
+
+    assert llm.summary_input.endswith(
+        "Done during the call (already completed, not next steps):\n"
+        '- Jira ticket SCRUM-7 created: "Invoice download crashes on Android after update"'
+    )
+    assert "Dismissed one" not in llm.summary_input
+    summary = store.get(code).summary
+    assert summary["action_items"] == ["Email the ticket", "Call the customer back on Friday"]
+    assert summary["outcome"] == "Jira ticket SCRUM-7 created"
+
+
+async def test_without_a_created_ticket_ticket_steps_stay(tmp_path):
+    store, code = seeded_store(tmp_path)
+    store.set_tickets(code, [created_ticket(status="failed")])
+    llm = RecordingLLM("ollama", result=dict(ANALYSIS, pii=[], action_items=["Raise a Jira ticket for the crash"]))
+    await analyse_session(store, code, LlmChain([llm]))
+    assert "Done during the call" not in llm.summary_input
+    assert store.get(code).summary["action_items"] == ["Raise a Jira ticket for the crash"]
+    assert store.get(code).summary["outcome"] == "Booked"
