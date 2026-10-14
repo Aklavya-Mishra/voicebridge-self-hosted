@@ -47,4 +47,4 @@ export const importRecording = (token: string, file: File, meChannel: 'left' | '
   return request<{ session: Session }>('/api/import', { method: 'POST', body: form }, token)
 }
 
-export const health = () => request<{ status: string; stt_provider: string; nba?: boolean }>('/api/health')
+export const health = () => request<{ status: string; stt_provider: string; nba?: boolean; tickets?: boolean }>('/api/health')

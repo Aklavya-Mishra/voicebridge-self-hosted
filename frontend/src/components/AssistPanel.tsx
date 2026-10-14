@@ -1,31 +1,70 @@
 import { domainText, factLabel, visibleHints } from '../lib/assist'
-import type { NbaHint, NbaStatusEvent } from '../lib/types'
+import { visibleTickets } from '../lib/tickets'
+import type { NbaHint, NbaStatusEvent, TicketDraft } from '../lib/types'
+import { TicketCard } from './TicketCard'
 
 interface Props {
+  /** Live hints are on (the hint and customer info sections). */
+  hintsEnabled: boolean
   /** Call type detected from the caller's latest line; null until they first speak. */
   detected: string | null
   hints: NbaHint[]
   facts: Record<string, string>
   status: NbaStatusEvent['state']
   reason?: string
+  /** Jira is set up on the server: tickets can be asked for on the call. */
+  ticketsEnabled: boolean
+  tickets: TicketDraft[]
+  onCreateTicket: (ticket: TicketDraft, title: string, description: string) => void
+  onDismissTicket: (ticket: TicketDraft) => void
 }
 
-/** Live hints for the advisor (newest first) and what the customer has told so far. */
-export function AssistPanel({ detected, hints, facts, status, reason }: Props) {
+/** Jira tickets asked for on the call, live hints for the advisor (newest first) and what the customer has told. */
+export function AssistPanel({
+  hintsEnabled,
+  detected,
+  hints,
+  facts,
+  status,
+  reason,
+  ticketsEnabled,
+  tickets,
+  onCreateTicket,
+  onDismissTicket,
+}: Props) {
+  const shownTickets = visibleTickets(tickets)
   return (
     <aside className="assist card" aria-label="Call assist">
       <div className="assist-head">
         <h2>Assist</h2>
       </div>
-      <p className="muted small">{domainText(detected)}</p>
-      {status === 'thinking' && <p className="muted small">Thinking…</p>}
-      {status === 'unavailable' && (
+      {hintsEnabled && <p className="muted small">{domainText(detected)}</p>}
+      {hintsEnabled && status === 'thinking' && <p className="muted small">Thinking…</p>}
+      {hintsEnabled && status === 'unavailable' && (
         <p className="notice small">AI hints unavailable ({reason}). Rule hints still work.</p>
       )}
-      <h3>Next best action</h3>
-      <HintList hints={visibleHints(hints)} />
-      <h3>Customer info</h3>
-      <FactList facts={facts} />
+      {ticketsEnabled && (
+        <>
+          <h3>Jira ticket</h3>
+          {shownTickets.length === 0 ? (
+            <p className="muted small">Say “create a Jira ticket …” on the call to draft one.</p>
+          ) : (
+            <div className="tickets">
+              {shownTickets.map((t) => (
+                <TicketCard key={t.id} ticket={t} onCreate={onCreateTicket} onDismiss={onDismissTicket} />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      {hintsEnabled && (
+        <>
+          <h3>Next best action</h3>
+          <HintList hints={visibleHints(hints)} />
+          <h3>Customer info</h3>
+          <FactList facts={facts} />
+        </>
+      )}
     </aside>
   )
 }

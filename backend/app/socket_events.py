@@ -20,7 +20,11 @@ Server -> client: participants {code, participants}, transcript {...see pipeline
                   stt_status {code, speaker, engine, reason} when a speaker falls back to local STT,
                   speaker_renamed {code, speaker_id, name},
                   live hints (app.nba): nba_hint {code, id, text, kind, intent, priority, ts},
-                  nba_facts {code, facts}, nba_domain {code, domain}, nba_status {code, state, reason?}
+                  nba_facts {code, facts}, nba_domain {code, domain}, nba_status {code, state, reason?},
+                  Jira tickets (app.tickets): ticket_draft {code, id, status, title, description, requested_by,
+                  trigger, ts, key?, url?, error?}
+Web -> server (Jira tickets): ticket_create {code, id, title, description} -> ack {ok, ticket?, error?},
+                  ticket_dismiss {code, id} -> ack {ok, ticket?, error?}
 """
 import asyncio
 import logging
@@ -39,6 +43,7 @@ from app.segmenter import Segmenter
 from app.sessions import CALL_SPEAKER_NAME, SessionError, SessionStore, Utterance, call_speaker_id, normalize_code
 from app.stt import STTProvider
 from app.stt.deepgram import DeepgramSTT
+from app.tickets import TicketService
 from app.vad import make_vad
 
 logger = logging.getLogger("voicebridge")
@@ -77,9 +82,11 @@ class SocketHandlers:
         stt: STTProvider,
         llm: LlmChain,
         nba: NbaService | None = None,
+        tickets: TicketService | None = None,
     ):
         self._sio = sio
         self._nba = nba
+        self._tickets = tickets
         self._llm = llm
         self._analysis: dict[str, asyncio.Task] = {}  # session code -> pending end-of-call analysis
         self._store = store
@@ -95,7 +102,8 @@ class SocketHandlers:
         self._muted: set[tuple[str, str]] = set()  # (session code, user id) whose mic is muted
         self._closing: set[asyncio.Task] = set()  # streams being flushed in the background
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
-                  "agent_start", "agent_stop", "agent_ping", "rename_speaker", "mute_mic")
+                  "agent_start", "agent_stop", "agent_ping", "rename_speaker", "mute_mic", "ticket_create",
+                  "ticket_dismiss")
         for name in events:
             sio.on(name, getattr(self, name))
 
@@ -125,6 +133,34 @@ class SocketHandlers:
             del self._agents[user_id]
             self._agent_codes.pop(user_id, None)
             await self._sio.emit("agent_status", {"online": False}, room=user_room(user_id))
+
+    async def ticket_create(self, sid: str, data: dict) -> dict:
+        return await self._ticket_action(sid, data, create=True)
+
+    async def ticket_dismiss(self, sid: str, data: dict) -> dict:
+        return await self._ticket_action(sid, data, create=False)
+
+    async def _ticket_action(self, sid: str, data: dict, create: bool) -> dict:
+        state = await self._sio.get_session(sid)
+        data = data or {}
+        code = normalize_code(data.get("code"))
+        if code not in state["codes"] or state.get("agent"):
+            return {"ok": False, "error": "Join the session first"}
+        if self._tickets is None:
+            return {"ok": False, "error": "Jira tickets are turned off"}
+        ticket_id = str(data.get("id") or "")
+        try:
+            if create:
+                ticket = await self._tickets.create(
+                    code, ticket_id, str(data.get("title") or ""), str(data.get("description") or "")
+                )
+            else:
+                ticket = await self._tickets.dismiss(code, ticket_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if ticket["status"] == "failed":
+            return {"ok": False, "error": ticket.get("error"), "ticket": ticket}
+        return {"ok": True, "ticket": ticket}
 
     async def agent_ping(self, sid: str, data: dict) -> None:
         """The agent's heartbeat. After a reconnect it is a new connection: register it again and give it back
@@ -317,6 +353,11 @@ class SocketHandlers:
                     await self._nba.on_final(code, utterance)
                 except Exception:  # a hint problem must never stop transcription
                     logger.exception("Live hints failed for session %s", code)
+            if self._tickets is not None:
+                try:
+                    await self._tickets.on_final(code, utterance)
+                except Exception:  # a ticket problem must never stop transcription
+                    logger.exception("Ticket drafting failed for session %s", code)
 
         async def notify(payload: dict) -> None:
             await self._sio.emit("stt_status", payload, room=room_for(code))

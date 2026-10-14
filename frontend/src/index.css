@@ -609,6 +609,60 @@ main.wide {
 .hint.alert {
   border-left: 3px solid var(--warn);
 }
+.tickets {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.ticket {
+  padding: 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.ticket p {
+  margin: 0;
+}
+.ticket.drafting {
+  border-style: dashed;
+}
+.ticket.created {
+  border-color: var(--border);
+}
+.ticket label {
+  margin: 0.5rem 0 0.2rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.ticket textarea {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+.ticket-trigger {
+  font-style: italic;
+}
+.ticket-title {
+  margin-top: 0.2rem;
+}
+.ticket-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.ticket .error {
+  margin: 0.4rem 0 0;
+}
+.ticket-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
 .hint-tag {
   font-size: 0.7rem;
   color: var(--muted);

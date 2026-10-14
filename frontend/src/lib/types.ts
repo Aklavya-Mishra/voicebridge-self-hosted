@@ -24,6 +24,8 @@ export interface Session {
   /** Names given to speakers who are not participants, e.g. "<user id>-call" renamed from "Computer". */
   speaker_names?: Record<string, string>
   nba?: NbaData
+  /** Jira tickets drafted from the call, oldest first. */
+  tickets?: TicketDraft[]
 }
 
 /** End-of-call analysis, made by the backend once a call stops. */
@@ -119,4 +121,20 @@ export interface NbaStatusEvent {
   code: string
   state: 'thinking' | 'idle' | 'unavailable'
   reason?: string
+}
+
+/** A Jira ticket drafted from the call (server `ticket_draft`); created only when the advisor clicks Create. */
+export interface TicketDraft {
+  id: string
+  status: 'drafting' | 'ready' | 'creating' | 'created' | 'failed' | 'dismissed'
+  title: string
+  description: string
+  /** Who asked for it on the call. */
+  requested_by: string
+  /** The line that asked for it. */
+  trigger: string
+  ts: number
+  key?: string
+  url?: string
+  error?: string
 }

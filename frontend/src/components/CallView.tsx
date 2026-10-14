@@ -4,6 +4,7 @@ import { API_BASE } from '../lib/api'
 import { addHint, hintsNewestFirst } from '../lib/assist'
 import { MicCapture } from '../lib/mic'
 import { hasConsented, saveConsent } from '../lib/storage'
+import { upsertTicket } from '../lib/tickets'
 import { formatTranscript } from '../lib/transcript'
 import {
   fromUtterance,
@@ -13,6 +14,7 @@ import {
   type NbaStatusEvent,
   type Session,
   type SttStatusEvent,
+  type TicketDraft,
   type TranscriptEvent,
   type User,
 } from '../lib/types'
@@ -28,13 +30,15 @@ interface Props {
   callName: string
   /** Live hints are on (backend NBA_ENABLED). */
   nbaEnabled: boolean
+  /** Jira is set up on the server: tickets can be asked for on the call. */
+  ticketsEnabled: boolean
   onLeave: () => void
   onAuthExpired: () => void
 }
 
 type Status = 'connecting' | 'joined' | 'error'
 
-export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAuthExpired }: Props) {
+export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me, onLeave, onAuthExpired }: Props) {
   const [status, setStatus] = useState<Status>('connecting')
   const [error, setError] = useState('')
   const [participants, setParticipants] = useState<User[]>([])
@@ -57,6 +61,7 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
   const [detected, setDetected] = useState<string | null>(null)
   const [hints, setHints] = useState<NbaHint[]>([])
   const [facts, setFacts] = useState<Record<string, string>>({})
+  const [tickets, setTickets] = useState<TicketDraft[]>([])
   const [nbaStatus, setNbaStatus] = useState<{ state: NbaStatusEvent['state']; reason?: string }>({ state: 'idle' })
   const socketRef = useRef<Socket | null>(null)
   const micRef = useRef<MicCapture | null>(null)
@@ -103,6 +108,7 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
       setDetected(session.nba?.detected ?? null)
       setHints(hintsNewestFirst(session.nba?.hints ?? []))
       setFacts(session.nba?.facts ?? {})
+      setTickets(session.tickets ?? [])
       setStatus('joined')
       setError('') // e.g. "Cannot reach the server" from before the connection recovered
       // A dropped connection made the server stop the agent for this call: start it again.
@@ -142,6 +148,7 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
     socket.on('nba_facts', (data: { facts: Record<string, string> }) => setFacts(data.facts))
     socket.on('nba_domain', (data: NbaDomainEvent) => setDetected(data.domain))
     socket.on('nba_status', (data: NbaStatusEvent) => setNbaStatus({ state: data.state, reason: data.reason }))
+    socket.on('ticket_draft', (ticket: TicketDraft) => setTickets((prev) => upsertTicket(prev, ticket)))
 
     return () => {
       void micRef.current?.stop()
@@ -218,6 +225,16 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
     }
     setRecording(false)
     setLevels([])
+  }
+
+  const createTicket = async (ticket: TicketDraft, title: string, description: string) => {
+    const ack = await socketRef.current?.emitWithAck('ticket_create', { code, id: ticket.id, title, description })
+    if (!ack?.ok && !ack?.ticket) setError(ack?.error ?? 'Could not create the Jira ticket')
+  }
+
+  const dismissTicket = async (ticket: TicketDraft) => {
+    const ack = await socketRef.current?.emitWithAck('ticket_dismiss', { code, id: ticket.id })
+    if (!ack?.ok) setError(ack?.error ?? 'Could not dismiss the ticket')
   }
 
   const leave = async () => {
@@ -326,14 +343,19 @@ export function CallView({ code, callName, nbaEnabled, token, me, onLeave, onAut
       ))}
       {status === 'connecting' && <p className="muted">Connecting…</p>}
 
-      <div className={nbaEnabled ? 'call-body' : 'call-body solo'}>
-        {nbaEnabled && (
+      <div className={nbaEnabled || ticketsEnabled ? 'call-body' : 'call-body solo'}>
+        {(nbaEnabled || ticketsEnabled) && (
           <AssistPanel
+            hintsEnabled={nbaEnabled}
             detected={detected}
             hints={hints}
             facts={facts}
             status={nbaStatus.state}
             reason={nbaStatus.reason}
+            ticketsEnabled={ticketsEnabled}
+            tickets={tickets}
+            onCreateTicket={createTicket}
+            onDismissTicket={dismissTicket}
           />
         )}
         <Chat

@@ -66,6 +66,12 @@ class Settings:
     nba_phrase_match: int = 88  # fuzzy score (0-100) for phrase rules
     nba_dedupe: int = 90  # similarity above which a new hint repeats an earlier one
     nba_absent_after: int = 4  # customer lines before "fact missing" rules may fire
+    # Jira tickets drafted from the call (app.tickets): on only when URL, email, token and project key are set.
+    jira_url: str | None = None  # e.g. https://yourcompany.atlassian.net
+    jira_email: str | None = None
+    jira_api_token: str | None = None
+    jira_project_key: str | None = None  # e.g. SCRUM
+    jira_issue_type: str = "Task"
     whisper_model: str = "base"  # tiny | base | small | medium | large-v3 (bigger = more accurate, slower)
     whisper_device: str = "cpu"  # cpu | cuda
     whisper_compute_type: str = "int8"  # int8 on CPU; float16 on GPU
@@ -75,6 +81,10 @@ class Settings:
 
     max_import_bytes: int = 100 * 1024 * 1024
     max_chunk_bytes: int = 64000
+
+    @property
+    def tickets_enabled(self) -> bool:
+        return bool(self.jira_url and self.jira_email and self.jira_api_token and self.jira_project_key)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -124,6 +134,11 @@ class Settings:
             nba_phrase_match=int(env("NBA_PHRASE_MATCH", cls.nba_phrase_match)),
             nba_dedupe=int(env("NBA_DEDUPE", cls.nba_dedupe)),
             nba_absent_after=int(env("NBA_ABSENT_AFTER", cls.nba_absent_after)),
+            jira_url=(env("JIRA_URL") or "").rstrip("/") or None,
+            jira_email=env("JIRA_EMAIL") or None,
+            jira_api_token=env("JIRA_API_TOKEN") or None,
+            jira_project_key=env("JIRA_PROJECT_KEY") or None,
+            jira_issue_type=env("JIRA_ISSUE_TYPE", cls.jira_issue_type),
             whisper_model=env("WHISPER_MODEL", cls.whisper_model),
             whisper_device=env("WHISPER_DEVICE", cls.whisper_device),
             whisper_compute_type=env("WHISPER_COMPUTE_TYPE", cls.whisper_compute_type),

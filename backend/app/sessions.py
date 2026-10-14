@@ -86,6 +86,8 @@ class Session:
     speaker_names: dict[str, str] = field(default_factory=dict)
     # Live hints (app.nba): the call type found from the caller's latest line, the hints and facts shown so far.
     nba: dict = field(default_factory=empty_nba)
+    # Jira tickets drafted from the call (app.tickets), oldest first.
+    tickets: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -99,6 +101,7 @@ class Session:
             "summary": self.summary,
             "speaker_names": self.speaker_names,
             "nba": self.nba,
+            "tickets": self.tickets,
         }
 
 
@@ -119,7 +122,7 @@ CREATE INDEX IF NOT EXISTS utterances_by_code ON utterances(code, start_ts);
 """
 # Columns added after the first release; created on databases that predate them.
 # Older databases also have a `domain` column (the call type picked by hand, since removed); it is not read.
-_ADDED_COLUMNS = {"sessions": [("summary", "TEXT"), ("speaker_names", "TEXT"), ("nba", "TEXT")]}
+_ADDED_COLUMNS = {"sessions": [("summary", "TEXT"), ("speaker_names", "TEXT"), ("nba", "TEXT"), ("tickets", "TEXT")]}
 
 
 class _Db:
@@ -137,12 +140,12 @@ class _Db:
     def save_session(self, s: "Session") -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO sessions"
-            " (code, id, kind, created_by, created_at, participants, summary, speaker_names, nba)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " (code, id, kind, created_by, created_at, participants, summary, speaker_names, nba, tickets)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 s.code, s.id, s.kind, s.created_by, s.created_at, json.dumps(s.participants),
                 json.dumps(s.summary) if s.summary is not None else None, json.dumps(s.speaker_names),
-                json.dumps(s.nba),
+                json.dumps(s.nba), json.dumps(s.tickets),
             ),
         )
 
@@ -154,7 +157,7 @@ class _Db:
 
     def load(self) -> list["Session"]:
         rows = self._conn.execute(
-            "SELECT code, id, kind, created_by, created_at, participants, summary, speaker_names, nba"
+            "SELECT code, id, kind, created_by, created_at, participants, summary, speaker_names, nba, tickets"
             " FROM sessions"
         )
         sessions = {
@@ -163,8 +166,9 @@ class _Db:
                 summary=json.loads(summary) if summary else None,
                 speaker_names=json.loads(names) if names else {},
                 nba={**empty_nba(), **json.loads(nba)} if nba else empty_nba(),
+                tickets=json.loads(tickets) if tickets else [],
             )
-            for code, sid, kind, by, at, people, summary, names, nba in rows
+            for code, sid, kind, by, at, people, summary, names, nba, tickets in rows
         }
         rows = self._conn.execute(
             "SELECT id, code, speaker_id, speaker_name, text, start_ts, end_ts FROM utterances ORDER BY start_ts"
@@ -319,6 +323,11 @@ class SessionStore:
     def set_summary(self, code: str, summary: dict | None) -> None:
         session = self.get(code)
         session.summary = summary
+        self._save(session)
+
+    def set_tickets(self, code: str, tickets: list) -> None:
+        session = self.get(code)
+        session.tickets = tickets
         self._save(session)
 
     def set_nba(self, code: str, nba: dict) -> None:

@@ -26,12 +26,14 @@ export default function App() {
   const [provider, setProvider] = useState('')
   const [agentFound, setAgentFound] = useState(false)
   const [nbaEnabled, setNbaEnabled] = useState(false)
+  const [ticketsEnabled, setTicketsEnabled] = useState(false)
 
   useEffect(() => {
     health()
       .then((h) => {
         setProvider(h.stt_provider)
         setNbaEnabled(Boolean(h.nba))
+        setTicketsEnabled(Boolean(h.tickets))
       })
       .catch(() => setProvider('offline'))
   }, [])
@@ -127,6 +129,7 @@ export default function App() {
             code={view.code}
             callName={view.callName}
             nbaEnabled={nbaEnabled}
+            ticketsEnabled={ticketsEnabled}
             token={auth.token}
             me={auth.user}
             onLeave={goHome}

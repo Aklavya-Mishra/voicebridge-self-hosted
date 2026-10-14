@@ -26,21 +26,27 @@ def _hint(rule, ts: float | None) -> dict:
     }
 
 
-def _says(line: str, phrase: str, threshold: int) -> bool:
+def phrase_end(line: str, phrase: str, threshold: int) -> int | None:
+    """Where `phrase` ends in the normalized `line` when the line says it (fuzzy, whole words), else None."""
     phrase = normalize(phrase)
     # A line shorter than the phrase cannot contain it ("No." must not match "no signal").
     if not phrase or len(line) < len(phrase):
-        return False
+        return None
     match = fuzz.partial_ratio_alignment(phrase, line, score_cutoff=threshold)
     if match is None:
-        return False
+        return None
     # The matched part must start and end on whole words: "it s working since y" is not "not working since".
     start, end = match.dest_start, match.dest_end
     while start < end and line[start] == " ":
         start += 1
     while end > start and line[end - 1] == " ":
         end -= 1
-    return (start == 0 or line[start - 1] == " ") and (end == len(line) or line[end] == " ")
+    whole_words = (start == 0 or line[start - 1] == " ") and (end == len(line) or line[end] == " ")
+    return end if whole_words else None
+
+
+def _says(line: str, phrase: str, threshold: int) -> bool:
+    return phrase_end(line, phrase, threshold) is not None
 
 
 def match_phrase_rules(

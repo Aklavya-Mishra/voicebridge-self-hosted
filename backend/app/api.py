@@ -31,7 +31,13 @@ def _session_error(exc: SessionError) -> HTTPException:
 
 @router.get("/health")
 def health(request: Request) -> dict:
-    return {"status": "ok", "stt_provider": request.app.state.stt.name, "nba": request.app.state.settings.nba_enabled}
+    settings = request.app.state.settings
+    return {
+        "status": "ok",
+        "stt_provider": request.app.state.stt.name,
+        "nba": settings.nba_enabled,
+        "tickets": settings.tickets_enabled,
+    }
 
 
 @router.post("/auth/login")

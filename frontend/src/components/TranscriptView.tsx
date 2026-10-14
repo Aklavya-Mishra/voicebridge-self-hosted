@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getSession } from '../lib/api'
 import { savedFacts } from '../lib/assist'
+import { createdTickets } from '../lib/tickets'
 import { fromUtterance, type CallSummary, type Session } from '../lib/types'
 import { FactList } from './AssistPanel'
 
@@ -53,6 +54,21 @@ export function TranscriptView({ code, token, onBack }: Props) {
           */}
           <h3>Customer info</h3>
           <FactList facts={savedFacts(session.nba)} />
+        </section>
+      )}
+      {session && createdTickets(session.tickets ?? []).length > 0 && (
+        <section className="summary-box" aria-label="Jira tickets">
+          <h3>Jira tickets</h3>
+          <ul className="ticket-list">
+            {createdTickets(session.tickets ?? []).map((t) => (
+              <li key={t.id}>
+                <a href={t.url} target="_blank" rel="noreferrer">
+                  {t.key}
+                </a>{' '}
+                {t.title}
+              </li>
+            ))}
+          </ul>
         </section>
       )}
       {session && lines.length === 0 && <p className="muted">This call has no transcript.</p>}

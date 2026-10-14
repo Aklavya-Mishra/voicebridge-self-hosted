@@ -7,11 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import router
 from app.config import DEV_JWT_SECRET, Settings
+from app.jira_client import JiraClient
 from app.llm import LLM, LlmChain, OllamaLLM, make_llm_chain
 from app.nba.service import NbaService
 from app.sessions import SessionStore
 from app.socket_events import SocketHandlers, room_for
 from app.stt import STTProvider, make_stt
+from app.tickets import TicketService
 
 logger = logging.getLogger("voicebridge")
 
@@ -21,6 +23,7 @@ def create_app(
     stt: STTProvider | None = None,
     llm: LlmChain | None = None,
     nba_llm: LLM | None = None,
+    jira=None,
 ) -> socketio.ASGIApp:
     settings = settings or Settings.from_env()
     if settings.jwt_secret == DEV_JWT_SECRET:
@@ -51,16 +54,21 @@ def create_app(
         max_http_buffer_size=settings.max_chunk_bytes * 4,
     )
 
+    async def room_emit(code: str, event: str, payload: dict) -> None:
+        await sio.emit(event, payload, room=room_for(code))
+
+    # Live hints and ticket drafts use the local model only, whatever cloud keys are set. They share one model
+    # and context size, so Ollama never reloads it between the two.
+    if settings.nba_enabled or settings.tickets_enabled:
+        nba_llm = nba_llm or OllamaLLM(settings, model=settings.nba_model, num_ctx=settings.nba_num_ctx)
     nba = None
     if settings.nba_enabled:
-        # Live hints use the local model only, whatever cloud keys are set.
-        nba_llm = nba_llm or OllamaLLM(settings, model=settings.nba_model, num_ctx=settings.nba_num_ctx)
         logger.info("Live hints with: ollama %s", settings.nba_model)
-
-        async def nba_emit(code: str, event: str, payload: dict) -> None:
-            await sio.emit(event, payload, room=room_for(code))
-
-        nba = NbaService(store, settings, nba_llm, nba_emit)
-    SocketHandlers(sio, store, settings, stt, llm, nba)
+        nba = NbaService(store, settings, nba_llm, room_emit)
+    tickets = None
+    if settings.tickets_enabled:
+        logger.info("Jira tickets into project %s at %s", settings.jira_project_key, settings.jira_url)
+        tickets = TicketService(store, settings, nba_llm, jira or JiraClient(settings), room_emit)
+    SocketHandlers(sio, store, settings, stt, llm, nba, tickets)
     # At start, have the hint model read its fixed prompt (~20 s on CPU) before the first call needs it.
     return socketio.ASGIApp(sio, other_asgi_app=api, on_startup=nba.warm if nba else None)
