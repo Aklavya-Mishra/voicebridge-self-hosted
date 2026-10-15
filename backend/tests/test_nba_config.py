@@ -18,3 +18,12 @@ def test_hint_settings_from_env(monkeypatch):
     assert (s.nba_enabled, s.nba_model, s.nba_num_ctx, s.nba_timeout_s, s.nba_absent_after) == (
         False, "qwen2.5:3b", 2048, 12.5, 6,
     )
+
+
+def test_hints_use_the_summary_context_unless_set(monkeypatch):
+    # One context size for the one local model: Ollama never reloads it between hints and the summary.
+    monkeypatch.setenv("NBA_NUM_CTX", "")
+    monkeypatch.setenv("LLM_NUM_CTX", "8192")
+    s = Settings.from_env()
+    assert s.nba_num_ctx == s.llm_num_ctx == 8192
+    assert Settings().nba_num_ctx == Settings().llm_num_ctx

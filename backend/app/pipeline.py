@@ -62,9 +62,13 @@ class ParticipantStream:
         semaphore: asyncio.Semaphore,
         emit: Emit,
         on_final: OnFinal,
+        voices=None,  # in-room: a VoiceTracker (app.stt.sherpa) giving each line's voice number
+        speaker_for: Callable[[int], dict] | None = None,  # in-room: voice number -> speaker
     ):
         self._code = code
-        self._speaker = speaker
+        self._speaker = speaker  # in-room: the speaker of the latest line, shown on live text
+        self._voices = voices
+        self._speaker_for = speaker_for
         self._segmenter = segmenter
         self._stt = stt
         self._sample_rate = sample_rate
@@ -123,27 +127,40 @@ class ParticipantStream:
         if text and segment.utterance_id not in self._finalized:
             await self._emit(self._payload(segment, text, final=False))
 
+    async def _voice_of(self, pcm: bytes) -> dict:
+        """In-room: who said this line, by voice print. Otherwise the stream's one speaker."""
+        if self._voices is None or self._speaker_for is None:
+            return self._speaker
+        try:
+            label = await asyncio.to_thread(self._voices.label, pcm)
+        except Exception:
+            logger.exception("Voice print failed for session %s", self._code)
+            return self._speaker
+        self._speaker = self._speaker_for(label)
+        return self._speaker
+
     async def _run_final(self, segment: Segment) -> None:
-        text = await self._transcribe(segment.pcm)
+        text, speaker = await asyncio.gather(self._transcribe(segment.pcm), self._voice_of(segment.pcm))
         self._finalized.add(segment.utterance_id)
         if text:
             await self._on_final(
                 Utterance(
                     id=segment.utterance_id,
-                    speaker_id=self._speaker["id"],
-                    speaker_name=self._speaker["name"],
+                    speaker_id=speaker["id"],
+                    speaker_name=speaker["name"],
                     text=text,
                     start_ts=segment.start_ts,
                     end_ts=segment.end_ts,
                 )
             )
-        await self._emit(self._payload(segment, text, final=True))
+        await self._emit(self._payload(segment, text, final=True, speaker=speaker))
 
-    def _payload(self, segment: Segment, text: str, final: bool) -> dict:
+    def _payload(self, segment: Segment, text: str, final: bool, speaker: dict | None = None) -> dict:
+        speaker = speaker or self._speaker
         return {
             "code": self._code,
             "utterance_id": segment.utterance_id,
-            "speaker": {"id": self._speaker["id"], "name": self._speaker["name"]},
+            "speaker": {"id": speaker["id"], "name": speaker["name"]},
             "text": text,
             "start_ts": segment.start_ts,
             "end_ts": segment.end_ts,

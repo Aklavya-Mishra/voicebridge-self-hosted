@@ -22,7 +22,7 @@ class Settings:
     db_path: str | None = None  # SQLite file for saved calls; None keeps everything in memory
 
     sample_rate: int = 16000
-    vad_provider: str = "energy"  # energy | silero
+    vad_provider: str = "energy"  # energy | silero (torch package) | sherpa (Silero model through sherpa-onnx, no torch)
     vad_energy_threshold_dbfs: float = -45.0
     end_silence_ms: int = 3000  # silence that ends a chat bubble (Deepgram and local)
     max_utterance_ms: int = 15000
@@ -31,7 +31,7 @@ class Settings:
     partials_enabled: bool = True
     partial_interval_ms: int = 1500
 
-    stt_provider: str = "whisper"  # deepgram (cloud) | whisper (local faster-whisper) | mock
+    stt_provider: str = "whisper"  # deepgram (cloud) | sherpa (local Parakeet) | whisper (local faster-whisper) | mock
     stt_fallback: str = "whisper"  # deepgram only: local provider used when Deepgram is unreachable
     stt_language: str | None = None
     stt_concurrency: int = 4
@@ -59,7 +59,9 @@ class Settings:
     # Live next-best-action hints (app.nba): local Ollama only, never a cloud model.
     nba_enabled: bool = False  # from_env turns it on
     nba_model: str = "qwen2.5:7b"  # set from the CPU benchmark (tools/bench_nba.py)
-    nba_num_ctx: int = 4096  # small context keeps CPU latency down
+    # Same context as llm_num_ctx by default: one model loaded at two sizes makes Ollama reload it on every switch, and
+    # Ollama 0.40.4 was seen hanging a 16384-token summary request forever while the 4096-token hint model was loaded.
+    nba_num_ctx: int = 16384
     nba_context_lines: int = 8  # transcript lines sent per turn
     # A slower turn is dropped. It includes waiting behind a warm-up (app.nba.service.warm, ~20 s on CPU).
     nba_timeout_s: float = 60.0
@@ -72,6 +74,16 @@ class Settings:
     jira_api_token: str | None = None
     jira_project_key: str | None = None  # e.g. SCRUM
     jira_issue_type: str = "Task"
+    # sherpa-onnx (local, CPU, English): model files from scripts/download_models.py, under sherpa_model_dir.
+    sherpa_model_dir: str = "models"
+    sherpa_asr_model: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"  # folder with encoder/decoder/joiner/tokens
+    sherpa_num_threads: int = 2  # per transcription; STT_CONCURRENCY of them run at once
+    sherpa_vad_model: str = "silero_vad.onnx"
+    sherpa_segmentation_model: str = "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"  # in-room: who spoke when
+    sherpa_embedding_model: str = "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"  # in-room: voice prints (CAM++ mixed voices up in tests)
+    # In-room live: voice-print similarity (0-1) at or above which a line joins a known voice; 0.4-0.6 all labelled the
+    # tools/make_test_audio.py meeting right (same person >= 0.74, two people <= 0.23 with ERes2Net).
+    sherpa_speaker_threshold: float = 0.5
     whisper_model: str = "base"  # tiny | base | small | medium | large-v3 (bigger = more accurate, slower)
     whisper_device: str = "cpu"  # cpu | cuda
     whisper_compute_type: str = "int8"  # int8 on CPU; float16 on GPU
@@ -128,7 +140,7 @@ class Settings:
             gemini_model=env("GEMINI_MODEL", cls.gemini_model),
             nba_enabled=_bool(env("NBA_ENABLED", "true")),
             nba_model=env("NBA_MODEL", cls.nba_model),
-            nba_num_ctx=int(env("NBA_NUM_CTX", cls.nba_num_ctx)),
+            nba_num_ctx=int(env("NBA_NUM_CTX") or env("LLM_NUM_CTX") or cls.nba_num_ctx),
             nba_context_lines=int(env("NBA_CONTEXT_LINES", cls.nba_context_lines)),
             nba_timeout_s=float(env("NBA_TIMEOUT_S", cls.nba_timeout_s)),
             nba_phrase_match=int(env("NBA_PHRASE_MATCH", cls.nba_phrase_match)),
@@ -139,6 +151,13 @@ class Settings:
             jira_api_token=env("JIRA_API_TOKEN") or None,
             jira_project_key=env("JIRA_PROJECT_KEY") or None,
             jira_issue_type=env("JIRA_ISSUE_TYPE", cls.jira_issue_type),
+            sherpa_model_dir=env("SHERPA_MODEL_DIR", cls.sherpa_model_dir),
+            sherpa_asr_model=env("SHERPA_ASR_MODEL", cls.sherpa_asr_model),
+            sherpa_num_threads=int(env("SHERPA_NUM_THREADS", cls.sherpa_num_threads)),
+            sherpa_vad_model=env("SHERPA_VAD_MODEL", cls.sherpa_vad_model),
+            sherpa_segmentation_model=env("SHERPA_SEGMENTATION_MODEL", cls.sherpa_segmentation_model),
+            sherpa_embedding_model=env("SHERPA_EMBEDDING_MODEL", cls.sherpa_embedding_model),
+            sherpa_speaker_threshold=float(env("SHERPA_SPEAKER_THRESHOLD", cls.sherpa_speaker_threshold)),
             whisper_model=env("WHISPER_MODEL", cls.whisper_model),
             whisper_device=env("WHISPER_DEVICE", cls.whisper_device),
             whisper_compute_type=env("WHISPER_COMPUTE_TYPE", cls.whisper_compute_type),

@@ -48,6 +48,10 @@ class SileroVAD:
 def make_vad(settings: Settings) -> VAD:
     if settings.vad_provider == "silero":
         return SileroVAD(sample_rate=settings.sample_rate)
+    if settings.vad_provider == "sherpa":
+        from app.stt.sherpa import SherpaVAD
+
+        return SherpaVAD(settings)
     if settings.vad_provider == "energy":
         return EnergyVAD(threshold_dbfs=settings.vad_energy_threshold_dbfs)
     raise ValueError(f"Unknown VAD_PROVIDER: {settings.vad_provider}")

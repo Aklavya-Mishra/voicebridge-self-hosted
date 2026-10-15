@@ -9,18 +9,26 @@ left, the other person on the right**. Speakers are told apart by audio channel,
 - **Two endpoints**: both people run VoiceBridge in one session, each sending their own browser mic.
 - **Import**: stereo recordings with one person per channel.
 
+**Self-hosted edition (this repo):** the same app, run at the least cost. Out of the box nothing is paid and nothing
+leaves the PC: speech-to-text is NVIDIA Parakeet TDT 0.6B through sherpa-onnx on the CPU (English), voice detection
+is Silero, in-room speaker separation is pyannote + ERes2Net, and summaries, hints and Jira drafts use `qwen2.5:7b`
+through Ollama. Gemini is used for summaries only when `GEMINI_API_KEY` is set. The paid engines (Deepgram, Gemini)
+are still one setting away, so both can be compared on the same calls (`backend/tools/eval_stt.py`,
+`backend/tools/e2e_call.py`). See [Measured](#measured-self-hosted-cpu) and
+[docs/self-hosted.md](docs/self-hosted.md).
+
 Design: [docs/specs/2026-10-07-voicebridge-v1-design.md](docs/specs/2026-10-07-voicebridge-v1-design.md)
 
 ```
 agent/     Windows desktop agent (Python, built as a tray .exe): mic + loopback of every output -> stereo chunks
 frontend/  React + Vite UI: sessions, mirrored chat, transcript download; browser mic when no agent runs
-backend/   FastAPI + Socket.IO: auth, invite-code sessions, per-channel STT (Deepgram + local fallback), import
+backend/   FastAPI + Socket.IO: auth, invite-code sessions, per-channel STT (local sherpa, or Deepgram), import
 ```
 
 ## Run locally
 
 Requirements: Python 3.11+, Node 20+, ffmpeg on PATH (for imports), and [Ollama](https://ollama.com) with
-`ollama pull qwen2.5:7b` for call summaries (not needed if you set a Gemini or Anthropic key, see below).
+`ollama pull qwen2.5:7b` for call summaries, live hints and Jira drafts (summaries can use Gemini instead, see below).
 
 ```bash
 # backend
@@ -28,7 +36,8 @@ cd backend
 python -m venv .venv
 .venv/Scripts/activate          # Windows; use .venv/bin/activate on macOS/Linux
 pip install -r requirements.txt
-cp .env.example .env            # then paste DEEPGRAM_API_KEY; without it, local Whisper is used
+python scripts/download_models.py   # once: ~500 MB of sherpa-onnx models into backend/models
+cp .env.example .env            # works as is: no key needed (add the Jira values for tickets)
 python run.py                   # http://localhost:8000
 
 # frontend (second terminal)
@@ -76,14 +85,17 @@ npm run dev                     # http://localhost:5173
 ### In-room meetings (one mic)
 
 For people in one room with one microphone (no headset), click **In-room** instead of **Start mic** on the
-call screen. Only the mic is used (with the agent, the computer's audio is ignored). Deepgram tells the voices
-apart (`diarize=true`): lines go to **Speaker 1**, **Speaker 2**…, each renamable with ✎, and **Swap sides**
+call screen. Only the mic is used (with the agent, the computer's audio is ignored). With `STT_PROVIDER=sherpa`,
+each line's voice print (ERes2Net) tells the voices apart live, and a pause of 1 s ends a line so each holds one
+voice; with Deepgram, `diarize=true` does. Lines go to **Speaker 1**, **Speaker 2**…, each renamable with ✎, and **Swap sides**
 flips who is on the left. Live labels can be unsure in the first minute (in a test with two male voices, the
 second person's first lines went to the first). So the meeting audio is kept in memory while recording (never
-written to disk) and, on Stop, Deepgram hears all of it again; the transcript is rebuilt from those labels
-(85.9% -> 96.8% of words on the right person in that test). Then the minutes are written: attendees,
-discussion, decisions, next steps, open issues, and Jira tickets created during the meeting. Hints and
-sentiment are off in this mode; Jira tickets work. Needs Deepgram: with the local fallback everyone is Speaker 1.
+written to disk) and, on Stop, all of it is checked again; the transcript is rebuilt from those labels. Deepgram:
+85.9% -> 96.8% of words on the right person in that test. sherpa: pyannote segmentation finds who spoke when,
+ERes2Net voice prints group it into people (in a child process, so live calls do not freeze), then Parakeet
+transcribes each stretch. Then the minutes are written: attendees, discussion, decisions, next steps, open issues,
+and Jira tickets created during the meeting. Hints and sentiment are off in this mode; Jira tickets work. Whisper
+cannot tell voices apart: with it everyone is Speaker 1.
 
 ### Call analysis: which model
 
@@ -165,11 +177,12 @@ Browsers allow the microphone only on `localhost` or HTTPS. A second machine mus
 
 ### Transcription
 
-Set `STT_PROVIDER` in `backend/.env` (`.env.example` uses `deepgram` with `whisper` as fallback):
+Set `STT_PROVIDER` in `backend/.env` (`.env.example` uses `sherpa`):
 
 | Provider | Setup |
 |---|---|
-| `deepgram` | Cloud, Nova-3, English + Hindi in one sentence (`DEEPGRAM_LANGUAGE=multi`; `en` for English only). `DEEPGRAM_API_KEY=...` from console.deepgram.com. Words appear ~0.3 s after speech. Each channel (your mic, the computer audio) has its own stream. If Deepgram is unreachable (bad key, no credit, network), that channel switches to `STT_FALLBACK` (default `whisper`) and the call shows a notice; audio Deepgram had not finalised is replayed locally, so nothing is lost. The next **Start** tries Deepgram again. File imports use Deepgram's pre-recorded API with the same fallback |
+| `sherpa` | Local, free, CPU, English only. NVIDIA Parakeet TDT 0.6B v2 (int8) through sherpa-onnx: punctuated, cased text with numbers as digits. Models from `python scripts/download_models.py` into `SHERPA_MODEL_DIR`. Each sentence is transcribed when it ends (live text every `PARTIAL_INTERVAL_MS` while it grows), ~28x faster than real time on CPU. `SHERPA_NUM_THREADS` threads per transcription, `STT_CONCURRENCY` at once. Pair with `VAD_PROVIDER=sherpa` (Silero, no torch). File imports and the in-room re-check run locally too |
+| `deepgram` | Cloud, Nova-3, English + Hindi in one sentence (`DEEPGRAM_LANGUAGE=multi`; `en` for English only). `DEEPGRAM_API_KEY=...` from console.deepgram.com. Words appear ~0.3 s after speech. Each channel (your mic, the computer audio) has its own stream. If Deepgram is unreachable (bad key, no credit, network), that channel switches to `STT_FALLBACK` (`.env.example`: `sherpa`) and the call shows a notice; audio Deepgram had not finalised is replayed locally, so nothing is lost. The next **Start** tries Deepgram again. File imports use Deepgram's pre-recorded API with the same fallback |
 | `whisper` | Local faster-whisper, no key. First start downloads the model (`WHISPER_MODEL`: `.env.example` uses `small`, which handles Hindi; `small.en` is more accurate for English only). Leave `STT_LANGUAGE` empty to auto-detect per sentence. `WHISPER_DEVICE=cuda` on an NVIDIA GPU |
 | `mock` | No model; shows "(mock transcript: 1.4s of speech)". Handy for UI work |
 
@@ -179,7 +192,28 @@ multi-threaded OpenMP busy-waiting made 4 threads ~20x slower than 1 on the dev 
 
 Deepgram bills every second of audio sent while recording, silence included, per channel. Nova-3
 streaming costs $0.0048–0.0077/min (`en`) or $0.0058–0.0092/min (`multi`), so a one-hour call (your mic +
-the computer audio) costs about $0.58–0.92.
+the computer audio) costs about $0.58–0.92. `sherpa` costs nothing per minute; it needs CPU time on the machine running
+the backend (see below).
+
+### Measured (self-hosted, CPU)
+
+On the dev PC (8 logical cores, 31 GB RAM, no GPU), 2026-10-15. Test audio: two LibriSpeech clips
+(`backend/tests/data`) and a 99 s support call in two Windows voices (`python tools/make_test_audio.py`).
+
+| What | Result |
+|---|---|
+| Word error rate, Parakeet (`python tools/eval_stt.py`) | 2.6% over 222 s (LibriSpeech 0% and 4.2%; call 1.7% and 3.8%, mostly "X two hundred" written "X200") |
+| Speed, Parakeet | real-time factor 0.035–0.046 (a 10 s sentence in ~0.4 s); model loads in 1.2 s |
+| Same set, local Whisper `small` (int8, beam 5) | WER 3.4%, real-time factor 0.070–0.256 |
+| Live call (`python tools/e2e_call.py`) | 13/13 lines on the right person; final text 0.4–0.7 s after a bubble closes |
+| In-room meeting, one mic (`--mode room`) | 2 voices found for 2 people, 100% of words on the right person, live and after the re-check |
+| Stereo import of the 99 s call | 5.2 s |
+| Jira draft (`qwen2.5:7b`) | drafted during the call; created as SCRUM-12 with `--create-ticket` |
+| Summary / minutes (`qwen2.5:7b`, CPU) | 20–33 s after Stop for the 99 s call; hints 5.7–11.4 s per line |
+
+The voices in these tests are synthetic (one male, one female); real rooms, accents and two similar voices will do
+worse. Compare against Deepgram on the same files: `python tools/eval_stt.py --engines sherpa,deepgram --diarize`
+(needs `DEEPGRAM_API_KEY`).
 
 ## Tests
 
@@ -187,6 +221,11 @@ the computer audio) costs about $0.58–0.92.
 cd backend && .venv/Scripts/python -m pytest
 cd frontend && npm test && npm run build && npm run lint
 cd agent && .venv/Scripts/python -m pytest
+
+# accuracy and speed of the engines, and a whole call against a running backend (Ollama + models needed)
+cd backend && .venv/Scripts/python tools/make_test_audio.py     # once, Windows: a test call from offline voices
+cd backend && .venv/Scripts/python tools/eval_stt.py --engines sherpa,whisper --diarize
+cd backend && .venv/Scripts/python tools/e2e_call.py --mode call   # or --mode room; --create-ticket makes a real Jira issue
 ```
 
 ## v1 limits
@@ -200,6 +239,12 @@ cd agent && .venv/Scripts/python -m pytest
   are transcribed as the other side; it also keeps transcribing your mic while you are muted in the call
   app. A full native endpoint is planned if the POC is approved.
 - Proper names are often misheard.
+- `sherpa` (Parakeet) is English only; for Hindi use `whisper`, or `deepgram` with `DEEPGRAM_LANGUAGE=multi`.
+- Live text with `sherpa` comes in steps (each `PARTIAL_INTERVAL_MS`), not word by word as with Deepgram.
+- In-room voice separation with `sherpa` was tuned on synthetic voices only (`SHERPA_SPEAKER_THRESHOLD`).
+- One Ollama serves hints, Jira drafts and summaries: keep one context size (`NBA_NUM_CTX` empty), or Ollama
+  reloads the model between them; Ollama 0.40.4 hung a summary that way. Another app using the same model at another
+  size (e.g. the original VoiceBridge with `NBA_NUM_CTX=4096`) causes the same.
 - The local summary model is good at short calls; very long calls (well over an hour) exceed its context
   (`LLM_NUM_CTX`) and are summarised from what fits.
 - Imports must be stereo with one speaker per channel; mono files are rejected.

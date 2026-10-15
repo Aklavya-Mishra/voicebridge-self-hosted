@@ -22,6 +22,10 @@ def make_stt(settings: Settings) -> STTProvider:
         from app.stt.mock import MockSTT
 
         return MockSTT()
+    if settings.stt_provider == "sherpa":
+        from app.stt.sherpa import SherpaSTT
+
+        return SherpaSTT(settings)
     if settings.stt_provider == "whisper":
         from app.stt.whisper import WhisperSTT
 

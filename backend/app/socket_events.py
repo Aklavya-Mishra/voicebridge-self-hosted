@@ -19,8 +19,9 @@ one per user):
 web -> server: set_mode {code, mode: call|room} -> ack {ok, error?} before recording; server -> room:
   mode_changed {code, mode}.
 In-room sessions (mode "room"): one mic hears everyone. Only the mic is used (mono, or the left channel of the agent's
-  stereo); Deepgram tells the voices apart and lines go to "<user id>-room<n>" ("Speaker n" until renamed). When
-  the mic stops, the meeting audio is checked again as a whole and the transcript of that span is rebuilt (app.room).
+  stereo); Deepgram, or sherpa's voice prints, tell the voices apart and lines go to "<user id>-room<n>" ("Speaker n"
+  until renamed). When the mic stops, the meeting audio is checked again as a whole and the transcript of that span
+  is rebuilt (app.room).
 Server -> client: participants {code, participants}, transcript {...see pipeline payload},
                   transcript_reset {code, transcript} when an in-room meeting's transcript was rebuilt,
                   stt_status {code, speaker, engine, reason} when a speaker falls back to local STT,
@@ -71,6 +72,8 @@ AGENT_ACK_TIMEOUT_S = 5.0
 
 # After the last stream of a call closes, wait this long before analysing it (the mic may restart).
 ANALYSIS_DELAY_S = 1.0
+# In-room with a local engine: pause (ms) that ends a line, so each line holds one voice for its voice print.
+ROOM_END_SILENCE_MS = 1000
 
 # Re-anchor a stream's clock to arrival time when the gap is bigger than this (seconds).
 CLOCK_RESYNC_S = 1.0
@@ -428,7 +431,7 @@ class SocketHandlers:
                 if c == code and speaker_id != user["id"] and hasattr(other, "cut"):
                     await other.cut(ts)
 
-        # In-room, a local engine cannot tell voices apart: everything goes to the first speaker.
+        # In-room, a local engine with voice prints (sherpa) labels each line; another one puts all on Speaker 1.
         local_speaker = speaker_for(0) if speaker_for else user
         if isinstance(self._stt, DeepgramSTT):
             fallback = self._stt.fallback
@@ -440,24 +443,26 @@ class SocketHandlers:
                 emit=emit,
                 on_final=on_final,
                 notify=notify,
-                make_fallback=lambda: self._local_stream(code, local_speaker, fallback, emit, on_final),
+                make_fallback=lambda: self._local_stream(code, local_speaker, fallback, emit, on_final, speaker_for),
                 on_start=on_start,
                 bubble_gap_s=self._settings.end_silence_ms / 1000,
                 speaker_for=speaker_for,
             )
         else:
-            stream = self._local_stream(code, local_speaker, self._stt, emit, on_final)
+            stream = self._local_stream(code, local_speaker, self._stt, emit, on_final, speaker_for)
         self._streams[(code, user["id"])] = stream
         if speaker_for is None:
             self._stream_speakers[(code, user["id"])] = user
         return stream
 
-    def _local_stream(self, code: str, user: dict, stt: STTProvider, emit, on_final) -> ParticipantStream:
+    def _local_stream(self, code: str, user: dict, stt: STTProvider, emit, on_final, speaker_for=None) -> ParticipantStream:
         s = self._settings
+        voices = stt.voices() if speaker_for is not None and hasattr(stt, "voices") else None
         segmenter = Segmenter(
             make_vad(s),
             sample_rate=s.sample_rate,
-            end_silence_ms=s.end_silence_ms,
+            # In-room, one line is one voice: a shorter pause ends it, so the next person gets their own line.
+            end_silence_ms=min(s.end_silence_ms, ROOM_END_SILENCE_MS) if voices else s.end_silence_ms,
             max_utterance_ms=s.max_utterance_ms,
             min_speech_ms=s.min_speech_ms,
             preroll_ms=s.preroll_ms,
@@ -474,6 +479,8 @@ class SocketHandlers:
             semaphore=self._semaphore,
             emit=emit,
             on_final=on_final,
+            voices=voices,
+            speaker_for=speaker_for if voices else None,
         )
 
     async def _close_stream(self, code: str, user_id: str) -> None:
