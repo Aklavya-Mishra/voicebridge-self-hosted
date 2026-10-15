@@ -8,6 +8,8 @@ interface Props {
   originTs: number
   /** Text shown while there are no messages (none by default). */
   emptyHint?: string
+  /** In-room meeting: this speaker is on the left and everyone is shown by name (nobody is "You"). */
+  leftSpeakerId?: string
 }
 
 const clock = (seconds: number) => {
@@ -16,7 +18,7 @@ const clock = (seconds: number) => {
 }
 
 /** Mirrored chat: my speech on the left, the other person on the right. */
-export function Chat({ messages, myId, originTs, emptyHint = '' }: Props) {
+export function Chat({ messages, myId, originTs, emptyHint = '', leftSpeakerId }: Props) {
   const endRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -27,12 +29,13 @@ export function Chat({ messages, myId, originTs, emptyHint = '' }: Props) {
   return (
     <div className="chat" role="log" aria-live="polite">
       {messages.map((m) => {
-        const mine = m.speakerId === myId
+        const room = leftSpeakerId !== undefined
+        const left = room ? m.speakerId === leftSpeakerId : m.speakerId === myId
         return (
-          <div key={m.id} className={`bubble-row ${mine ? 'mine' : 'theirs'}`}>
+          <div key={m.id} className={`bubble-row ${left ? 'mine' : 'theirs'}`}>
             <div className="bubble">
               <div className="bubble-meta">
-                <span>{mine ? 'You' : m.speakerName}</span>
+                <span>{left && !room ? 'You' : m.speakerName}</span>
                 <span>{clock(m.startTs - originTs)}</span>
               </div>
               <div className="bubble-text">

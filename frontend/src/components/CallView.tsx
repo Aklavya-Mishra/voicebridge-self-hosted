@@ -5,6 +5,7 @@ import { addHint, hintsNewestFirst } from '../lib/assist'
 import { MicCapture } from '../lib/mic'
 import { hasConsented, saveConsent } from '../lib/storage'
 import { upsertTicket } from '../lib/tickets'
+import { roomSpeakerIds, roomSpeakerName } from '../lib/room'
 import { formatTranscript } from '../lib/transcript'
 import {
   fromUtterance,
@@ -13,6 +14,7 @@ import {
   type NbaHint,
   type NbaStatusEvent,
   type Session,
+  type SessionMode,
   type SttStatusEvent,
   type TicketDraft,
   type TranscriptEvent,
@@ -62,6 +64,10 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
   const [hints, setHints] = useState<NbaHint[]>([])
   const [facts, setFacts] = useState<Record<string, string>>({})
   const [tickets, setTickets] = useState<TicketDraft[]>([])
+  const [mode, setMode] = useState<SessionMode>('call')
+  // In-room: which speaker is on the left is swapped by hand; after Stop the meeting is checked again.
+  const [swapped, setSwapped] = useState(false)
+  const [rechecking, setRechecking] = useState(false)
   const [nbaStatus, setNbaStatus] = useState<{ state: NbaStatusEvent['state']; reason?: string }>({ state: 'idle' })
   const socketRef = useRef<Socket | null>(null)
   const micRef = useRef<MicCapture | null>(null)
@@ -109,6 +115,7 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
       setHints(hintsNewestFirst(session.nba?.hints ?? []))
       setFacts(session.nba?.facts ?? {})
       setTickets(session.tickets ?? [])
+      setMode(session.mode ?? 'call')
       setStatus('joined')
       setError('') // e.g. "Cannot reach the server" from before the connection recovered
       // A dropped connection made the server stop the agent for this call: start it again.
@@ -148,6 +155,11 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
     socket.on('nba_facts', (data: { facts: Record<string, string> }) => setFacts(data.facts))
     socket.on('nba_domain', (data: NbaDomainEvent) => setDetected(data.domain))
     socket.on('nba_status', (data: NbaStatusEvent) => setNbaStatus({ state: data.state, reason: data.reason }))
+    socket.on('mode_changed', (data: { mode: SessionMode }) => setMode(data.mode))
+    socket.on('transcript_reset', (data: { transcript: Session['transcript'] }) => {
+      setMessages(new Map(data.transcript.map((u) => [u.id, fromUtterance(u)])))
+      setRechecking(false)
+    })
     socket.on('ticket_draft', (ticket: TicketDraft) => setTickets((prev) => upsertTicket(prev, ticket)))
 
     return () => {
@@ -164,8 +176,18 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
     saveConsent(code)
   }
 
-  /** The recording notice is shown once per call; after that Start mic starts right away. */
-  const requestStart = () => {
+  /** Start mic (call: speakers by channel) or In-room (one mic, voices told apart). The recording notice is shown
+   * once per call; after that recording starts right away. */
+  const requestStart = async (next: SessionMode) => {
+    setError('')
+    if (next !== mode) {
+      const ack = await socketRef.current?.emitWithAck('set_mode', { code, mode: next })
+      if (!ack?.ok) {
+        setError(ack?.error ?? 'Could not switch mode')
+        return
+      }
+      setMode(next)
+    }
     if (!consented) setConsentOpen(true)
     else if (agentOnline) void startAgent()
     else void startMic()
@@ -225,6 +247,10 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
     }
     setRecording(false)
     setLevels([])
+    if (mode === 'room') {
+      setRechecking(true)
+      setTimeout(() => setRechecking(false), 60000) // nothing to re-check (e.g. no Deepgram): stop saying so
+    }
   }
 
   const createTicket = async (ticket: TicketDraft, title: string, description: string) => {
@@ -266,6 +292,9 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
     if (!ack?.ok) throw new Error(ack?.error ?? 'Could not rename')
   }
   const myName = participants.find((p) => p.id === me.id)?.name ?? callName
+  const room = mode === 'room'
+  const roomIds = roomSpeakerIds(sorted)
+  const leftId = swapped ? (roomIds[1] ?? roomIds[0]) : roomIds[0]
 
   const downloadTranscript = () => {
     const text = formatTranscript(sorted)
@@ -287,6 +316,25 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
           </button>
         </div>
         <div className="people">
+          {room ? (
+            <>
+              {roomIds.length === 0 && <span className="person waiting">In-room meeting · voices appear as people speak</span>}
+              {roomIds.map((id) => (
+                <EditableName
+                  key={id}
+                  className={`person ${id === leftId ? 'mine' : 'theirs'}`}
+                  name={roomSpeakerName(id, sorted, speakerNames)}
+                  onSave={(n) => rename(id, n)}
+                />
+              ))}
+              {roomIds.length > 1 && (
+                <button className="link" onClick={() => setSwapped((s) => !s)}>
+                  Swap sides
+                </button>
+              )}
+            </>
+          ) : (
+          <>
           <EditableName className="person mine" prefix="You · " name={myName} onSave={(n) => rename(me.id, n)} />
           {other ? (
             <span className="person theirs">{other.name}</span>
@@ -295,16 +343,21 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
           ) : (
             <span className="person theirs waiting">Waiting for the other person…</span>
           )}
+          </>
+          )}
         </div>
         <div className="call-actions">
+          {recording && viaAgent && room && (
+            <button onClick={stopMic}>Stop</button>
+          )}
           {recording && viaAgent ? (
             muted ? (
               <button className="primary" onClick={() => setMicMuted(false)}>
-                Unmute mic
+                {room ? 'Resume' : 'Unmute mic'}
               </button>
             ) : (
               <button className="danger" onClick={() => setMicMuted(true)}>
-                <span className="rec-dot" /> Mute mic
+                <span className="rec-dot" /> {room ? 'Pause' : 'Mute mic'}
               </button>
             )
           ) : recording ? (
@@ -312,9 +365,23 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
               <span className="rec-dot" /> Stop mic
             </button>
           ) : (
-            <button className="primary" onClick={requestStart} disabled={status !== 'joined'}>
-              Start mic
-            </button>
+            <>
+              <button
+                className="primary"
+                onClick={() => requestStart('call')}
+                disabled={status !== 'joined'}
+                title="A call: your mic is you, the computer's audio is the other person"
+              >
+                Start mic
+              </button>
+              <button
+                onClick={() => requestStart('room')}
+                disabled={status !== 'joined'}
+                title="People in one room, one mic, no headset: voices are told apart"
+              >
+                In-room
+              </button>
+            </>
           )}
           <button onClick={downloadTranscript} disabled={sorted.length === 0}>
             Transcript
@@ -334,8 +401,16 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
         ))}
       {error && <p className="error">{error}</p>}
       {recording && viaAgent && muted && (
-        <p className="notice">Your mic is muted. The other person is still being transcribed.</p>
+        <p className="notice">
+          {room ? 'Paused. Nothing is being transcribed.' : 'Your mic is muted. The other person is still being transcribed.'}
+        </p>
       )}
+      {room && recording && (
+        <p className="muted small">
+          Who is speaking can be unsure in the first minute; the whole meeting is checked again when you stop.
+        </p>
+      )}
+      {room && !recording && rechecking && <p className="muted small">Checking who said what…</p>}
       {[...localEngine].map(([id, name]) => (
         <p key={id} className="notice">
           Deepgram unavailable for {id === me.id ? 'you' : name} — using local transcription.
@@ -343,10 +418,10 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
       ))}
       {status === 'connecting' && <p className="muted">Connecting…</p>}
 
-      <div className={nbaEnabled || ticketsEnabled ? 'call-body' : 'call-body solo'}>
-        {(nbaEnabled || ticketsEnabled) && (
+      <div className={(nbaEnabled && !room) || ticketsEnabled ? 'call-body' : 'call-body solo'}>
+        {((nbaEnabled && !room) || ticketsEnabled) && (
           <AssistPanel
-            hintsEnabled={nbaEnabled}
+            hintsEnabled={nbaEnabled && !room}
             detected={detected}
             hints={hints}
             facts={facts}
@@ -362,6 +437,7 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
           messages={sorted}
           myId={me.id}
           originTs={originTs}
+          leftSpeakerId={room ? (leftId ?? '') : undefined}
         />
       </div>
 
@@ -386,11 +462,23 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="card modal">
             <h2>Before you start</h2>
-            <p>
-              Your microphone will be transcribed and shared with the other person in this session. Recording or
-              transcribing calls can require consent from everyone on the call.
-            </p>
-            {agentOnline ? (
+            {room ? (
+              <p>
+                Everyone in the room will be transcribed. Tell them before you start: recording a meeting can require
+                consent from everyone in it.
+              </p>
+            ) : (
+              <p>
+                Your microphone will be transcribed and shared with the other person in this session. Recording or
+                transcribing calls can require consent from everyone on the call.
+              </p>
+            )}
+            {room ? (
+              <p className="muted small">
+                Only this PC's microphone is used; no headset. Place it between the people talking, and keep the
+                computer silent.
+              </p>
+            ) : agentOnline ? (
               <p className="muted small">
                 The VoiceBridge Agent captures your mic (your side) and your computer's audio (the other person),
                 from any call app. Nothing is shared. Use a headset so their voice is not picked up by your mic too.
@@ -409,7 +497,9 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
                   Start
                 </button>
               ) : (
-                <button onClick={startMic}>Mic only</button>
+                <button className={room ? 'primary' : undefined} onClick={startMic}>
+                  {room ? 'Start' : 'Mic only'}
+                </button>
               )}
             </div>
           </div>

@@ -18,7 +18,8 @@ logger = logging.getLogger("voicebridge")
 
 Emit = Callable[[dict], Awaitable[None]]
 OnFinal = Callable[[Utterance], Awaitable[None]]
-Word = tuple[float, float, str]  # (start, end, text) of one recognised word
+# (start, end, text, speaker) of one recognised word; speaker is Deepgram's voice number (0 without diarization).
+Word = tuple[float, float, str, int]
 # One Deepgram result: its words, and its text as Deepgram formatted it ("87548734", not "eight seven...").
 Part = tuple[list[Word], str]
 
@@ -172,6 +173,8 @@ class DeepgramParticipantStream:
     stream from make_fallback() and this speaker stays local until the mic is restarted.
     When another speaker in the call starts a sentence, cut() ends this speaker's open sentence at that
     moment and the words after it continue in a new bubble, so the chat reads in speaking order.
+    With `speaker_for` (in-room mode: one mic, several people), Deepgram numbers the voices it hears and each
+    word goes to speaker_for(number); a bubble also ends when a final result says another voice is speaking.
     Times below are seconds of audio received since the stream opened unless named *_ts.
     """
 
@@ -188,8 +191,11 @@ class DeepgramParticipantStream:
         make_fallback: Callable[[], ParticipantStream],
         on_start: Callable[[float], Awaitable[None]] | None = None,
         bubble_gap_s: float = 3.0,
+        speaker_for: Callable[[int], dict] | None = None,
     ):
         self._code = code
+        self._speaker_for = speaker_for
+        self._sentence_speaker = speaker  # who the open bubble belongs to
         self._bubble_gap_s = bubble_gap_s
         self._speaker = speaker
         self._stt = stt
@@ -269,7 +275,7 @@ class DeepgramParticipantStream:
         await self._disconnect()
         try:
             self._conn = await asyncio.wait_for(
-                ws_connect(self._stt.live_url(), additional_headers=self._stt.headers),
+                ws_connect(self._stt.live_url(diarize=self._speaker_for is not None), additional_headers=self._stt.headers),
                 self._stt.connect_timeout_s,
             )
         except Exception as exc:
@@ -337,7 +343,12 @@ class DeepgramParticipantStream:
             return
         alternative = message["channel"]["alternatives"][0]
         all_words = [
-            (self._conn_offset + w["start"], self._conn_offset + w["end"], w.get("punctuated_word") or w["word"])
+            (
+                self._conn_offset + w["start"],
+                self._conn_offset + w["end"],
+                w.get("punctuated_word") or w["word"],
+                w.get("speaker", 0),
+            )
             for w in alternative.get("words") or []
         ]
         words = [w for w in all_words if w[0] >= self._floor]
@@ -349,6 +360,8 @@ class DeepgramParticipantStream:
         if not message.get("is_final"):
             self._interim = [part] if part else []
             if part:
+                if not self._parts:  # live labels are unsure: only a final result ends a bubble with text
+                    await self._turn_to(words[0][3])
                 await self._start_sentence(words[0][0])
                 await self._emit(self._partial_payload())
             else:
@@ -360,16 +373,41 @@ class DeepgramParticipantStream:
                 message.get("speech_final"), len(words), self._code, mask_text(text),
             )
         if part:
-            part = self._with_dropped_words(part)
-            await self._start_sentence(part[0][0][0])
-            self._parts.append(part)
-            self._last_word = part[0][-1][1]
+            for run in self._runs(self._with_dropped_words(part)):
+                await self._turn_to(run[0][0][3])
+                await self._start_sentence(run[0][0][0])
+                self._parts.append(run)
+                self._last_word = run[0][-1][1]
         self._interim = []
         self._confirm(heard_until)
         if part:
             await self._emit(self._partial_payload())
         else:
             await self._end_if_silent(heard_until)
+
+    def _runs(self, part: Part) -> list[Part]:
+        """The part split where the speaking voice changes (one run without diarization)."""
+        words, text = part
+        if self._speaker_for is None or len({w[3] for w in words}) == 1:
+            return [part]
+        runs: list[list[Word]] = []
+        for w in words:
+            if runs and runs[-1][-1][3] == w[3]:
+                runs[-1].append(w)
+            else:
+                runs.append([w])
+        return [(run, _words_text(run)) for run in runs]
+
+    async def _turn_to(self, label: int) -> None:
+        """In-room mode: the next words are voice `label`. Another voice than the open bubble's ends it."""
+        if self._speaker_for is None:
+            return
+        speaker = self._speaker_for(label)
+        if self._utterance_id is not None and speaker["id"] != self._sentence_speaker["id"]:
+            if self._parts:
+                await self._finish_sentence()
+            # else only live text was shown: that bubble just changes speaker
+        self._sentence_speaker = speaker
 
     async def _end_if_silent(self, heard_until: float) -> None:
         """Deepgram heard nothing from the last word up to `heard_until`: a long enough silence ends the bubble."""
@@ -440,8 +478,8 @@ class DeepgramParticipantStream:
     async def _store(self, utterance_id: str, parts: list[Part], first: float, last: float) -> None:
         utterance = Utterance(
             id=utterance_id,
-            speaker_id=self._speaker["id"],
-            speaker_name=self._speaker["name"],
+            speaker_id=self._sentence_speaker["id"],
+            speaker_name=self._sentence_speaker["name"],
             text=clean_transcript(_text(parts)),
             start_ts=self._clock_base_ts + first,
             end_ts=self._clock_base_ts + last,
@@ -460,7 +498,7 @@ class DeepgramParticipantStream:
         return {
             "code": self._code,
             "utterance_id": utterance_id,
-            "speaker": self._speaker_ref(),
+            "speaker": {"id": self._sentence_speaker["id"], "name": self._sentence_speaker["name"]},
             "text": text,
             "start_ts": self._clock_base_ts + start,
             "end_ts": self._clock_base_ts + end,

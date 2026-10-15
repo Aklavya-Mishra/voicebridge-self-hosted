@@ -73,6 +73,18 @@ npm run dev                     # http://localhost:5173
    import, the person who did not start it), so a polite advisor does not soften an upset caller; a call where
    the caller never spoke has none.
 
+### In-room meetings (one mic)
+
+For people in one room with one microphone (no headset), click **In-room** instead of **Start mic** on the
+call screen. Only the mic is used (with the agent, the computer's audio is ignored). Deepgram tells the voices
+apart (`diarize=true`): lines go to **Speaker 1**, **Speaker 2**…, each renamable with ✎, and **Swap sides**
+flips who is on the left. Live labels can be unsure in the first minute (in a test with two male voices, the
+second person's first lines went to the first). So the meeting audio is kept in memory while recording (never
+written to disk) and, on Stop, Deepgram hears all of it again; the transcript is rebuilt from those labels
+(85.9% -> 96.8% of words on the right person in that test). Then the minutes are written: attendees,
+discussion, decisions, next steps, open issues, and Jira tickets created during the meeting. Hints and
+sentiment are off in this mode; Jira tickets work. Needs Deepgram: with the local fallback everyone is Speaker 1.
+
 ### Call analysis: which model
 
 Set in `backend/.env`. The first available provider is used; if it fails (quota, network), the next is

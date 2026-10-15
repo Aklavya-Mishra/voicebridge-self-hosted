@@ -33,7 +33,7 @@ export function PastCalls({ token, onOpen }: Props) {
                 {call.summary?.status === 'ready' && call.summary.sentiment && (
                   <span className={`pill sentiment-${call.summary.sentiment}`}>Sentiment: {call.summary.sentiment}</span>
                 )}{' '}
-                {call.kind === 'import' ? 'Import' : call.code}
+                {call.kind === 'import' ? 'Import' : call.mode === 'room' ? `Meeting · ${call.code}` : call.code}
               </span>
             </button>
           </li>

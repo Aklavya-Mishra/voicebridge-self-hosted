@@ -17,9 +17,17 @@ T0 = 1000.0  # server clock of the first audio sample
 
 
 def results(
-    text: str, start: float, duration: float, *, is_final: bool, speech_final: bool = False, words_from: float | None = None
+    text: str,
+    start: float,
+    duration: float,
+    *,
+    is_final: bool,
+    speech_final: bool = False,
+    words_from: float | None = None,
+    speakers: list[int] | None = None,
 ) -> str:
-    """`words_from`: the words are spread from this time to the end of the result (default: its start)."""
+    """`words_from`: the words are spread from this time to the end of the result (default: its start).
+    `speakers`: each word's voice number (diarization); none by default."""
     words = text.split()
     words_start = start if words_from is None else words_from
     step = (start + duration - words_start) / max(1, len(words))
@@ -36,6 +44,7 @@ def results(
                         "transcript": text,
                         "words": [
                             {"word": w, "start": words_start + i * step + 0.1, "end": words_start + (i + 1) * step - 0.1}
+                            | ({"speaker": speakers[i]} if speakers else {})
                             for i, w in enumerate(words)
                         ],
                     }
@@ -105,7 +114,7 @@ class FakeLocalStream:
         self.closed = True
 
 
-def build(url: str, api_key: str = "test-key"):
+def build(url: str, api_key: str = "test-key", speaker_for=None):
     settings = Settings(deepgram_api_key=api_key, deepgram_url=url, deepgram_connect_timeout_s=2.0)
     stt = DeepgramSTT(settings, fallback=RecordingSTT("local text"))
     emitted, stored, notices, fallbacks, starts = [], [], [], [], []
@@ -136,6 +145,7 @@ def build(url: str, api_key: str = "test-key"):
         notify=notify,
         make_fallback=make_fallback,
         on_start=on_start,
+        speaker_for=speaker_for,
     )
     build.starts = starts
     return stream, emitted, stored, notices, fallbacks
@@ -433,3 +443,79 @@ async def test_socket_handlers_use_deepgram_stream_with_local_fallback():
 
 async def _record(cuts, stream, ts):
     cuts.append((stream, ts))
+
+
+ROOM = {n: {"id": f"u-room{n + 1}", "name": f"Speaker {n + 1}"} for n in range(3)}
+
+
+async def test_in_room_a_new_voice_ends_the_bubble():
+    """One mic, two people: a final result whose words change voice splits into two bubbles, one per speaker."""
+    async def script(ws, received):
+        if received == 2.0:
+            await ws.send(
+                results("thanks for coming in. thank you", 0.0, 2.0, is_final=True, speakers=[0, 0, 0, 0, 1, 1])
+            )
+
+    async with FakeDeepgram(script) as server:
+        stream, emitted, stored, *_ = build(server.url, speaker_for=ROOM.__getitem__)
+        await feed(stream, tone(2.0))
+        await stream.close()
+
+    assert server.params["diarize"] == "true"
+    assert [(u.speaker_name, u.text) for u in stored] == [("Speaker 1", "thanks for coming in."), ("Speaker 2", "thank you")]
+    assert stored[0].speaker_id == "u-room1" and stored[1].speaker_id == "u-room2"
+    finals = [e for e in emitted if e["final"]]
+    assert [f["speaker"]["name"] for f in finals] == ["Speaker 1", "Speaker 2"]
+
+
+async def test_in_room_a_voice_change_in_live_text_waits_for_the_final():
+    """Live labels flip often: live text of another voice does not end a bubble that has final words."""
+    async def script(ws, received):
+        if received == 1.0:
+            await ws.send(results("hello there", 0.0, 1.0, is_final=True, speakers=[0, 0]))
+        elif received == 1.5:
+            await ws.send(results("my friend", 1.0, 0.5, is_final=False, speakers=[1, 1]))
+        elif received == 2.0:
+            await ws.send(results("my friend", 1.0, 1.0, is_final=True, speakers=[0, 0]))
+
+    async with FakeDeepgram(script) as server:
+        stream, emitted, stored, *_ = build(server.url, speaker_for=ROOM.__getitem__)
+        await feed(stream, tone(2.0))
+        await stream.close()
+
+    assert [(u.speaker_name, u.text) for u in stored] == [("Speaker 1", "hello there my friend")]
+    assert {e["speaker"]["name"] for e in emitted} == {"Speaker 1"}
+
+
+async def test_without_diarization_the_url_has_no_diarize():
+    async def script(ws, received):
+        return None
+
+    async with FakeDeepgram(script) as server:
+        stream, *_ = build(server.url)
+        await feed(stream, tone(0.2))
+        await stream.close()
+
+    assert "diarize" not in server.params
+
+
+async def test_diarize_asks_for_speakers_and_returns_words_with_them():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        words = [
+            {"word": "six", "punctuated_word": "Six", "start": 0.1, "end": 0.4, "speaker": 0},
+            {"word": "okay", "start": 1.0, "end": 1.3, "speaker": 1},
+        ]
+        return httpx.Response(200, json={"results": {"channels": [{"alternatives": [{"words": words}]}]}})
+
+    settings = Settings(deepgram_api_key="k", deepgram_language="en")
+    stt = DeepgramSTT(settings, fallback=RecordingSTT(), transport=httpx.MockTransport(handler))
+    words = await stt.diarize(silence(1.0), SR)
+
+    assert seen["params"]["diarize"] == "true" and seen["params"]["model"] == "nova-3"
+    assert words == [
+        {"start": 0.1, "end": 0.4, "word": "Six", "speaker": 0},
+        {"start": 1.0, "end": 1.3, "word": "okay", "speaker": 1},
+    ]

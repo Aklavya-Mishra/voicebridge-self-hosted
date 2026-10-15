@@ -168,3 +168,63 @@ async def test_joining_without_a_name_keeps_the_one_already_set(server):
     too_long = await client.call("join_session", {"code": code, "name": "x" * 41})
     assert too_long["ok"] is False
     await client.disconnect()
+
+
+async def test_in_room_meeting_uses_only_the_mic_and_records_speaker_1(server):
+    """An in-room session: the agent's stereo is reduced to the mic (left); lines go to Speaker 1 (a local engine
+    cannot tell voices apart) and the call audio (right) is ignored."""
+    token, user = await login(server, "Aklavya")
+    async with httpx.AsyncClient(base_url=server) as c:
+        session = (
+            await c.post("/api/sessions", json={"mode": "room"}, headers={"Authorization": f"Bearer {token}"})
+        ).json()["session"]
+    assert session["mode"] == "room"
+    code = session["code"]
+    client, events = await connect(server, token)
+    assert (await client.call("join_session", {"code": code}))["ok"]
+
+    left = tone(1.0) + silence(2.0)
+    right = silence(1.5) + tone(1.0) + silence(0.5)
+    for chunk in chunks(stereo(left, right), chunk_s=0.05):
+        await client.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+    await client.emit("stop_audio", {"code": code})
+
+    for _ in range(50):
+        finals = [d for kind, d in events if kind == "transcript" and d["final"] and d["text"]]
+        if finals:
+            break
+        await asyncio.sleep(0.1)
+    await asyncio.sleep(0.5)
+    finals = [d for kind, d in events if kind == "transcript" and d["final"] and d["text"]]
+    assert [(d["speaker"]["id"], d["speaker"]["name"]) for d in finals] == [(f"{user['id']}-room1", "Speaker 1")]
+    await client.disconnect()
+
+
+async def test_unknown_session_mode_is_refused(server):
+    token, _ = await login(server, "Aklavya")
+    async with httpx.AsyncClient(base_url=server) as c:
+        r = await c.post("/api/sessions", json={"mode": "party"}, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 400
+
+
+async def test_in_room_is_picked_on_the_call_screen_and_not_while_recording(server):
+    token, user = await login(server, "Aklavya")
+    async with httpx.AsyncClient(base_url=server) as c:
+        code = (await c.post("/api/sessions", headers={"Authorization": f"Bearer {token}"})).json()["session"]["code"]
+    client, events = await connect(server, token)
+    modes = []
+    client.on("mode_changed", lambda d: modes.append(d["mode"]))
+    assert (await client.call("join_session", {"code": code}))["ok"]
+
+    assert (await client.call("set_mode", {"code": code, "mode": "room"}))["ok"]
+    assert (await client.call("set_mode", {"code": code, "mode": "party"}))["ok"] is False
+    await client.emit("audio_chunk", {"code": code, "audio": tone(0.1)})
+    await asyncio.sleep(0.2)
+    busy = await client.call("set_mode", {"code": code, "mode": "call"})
+    assert busy == {"ok": False, "error": "Stop the mic first"}
+    await asyncio.sleep(0.1)
+    assert modes == ["room"]
+    async with httpx.AsyncClient(base_url=server) as c:
+        session = (await c.get(f"/api/sessions/{code}", headers={"Authorization": f"Bearer {token}"})).json()["session"]
+    assert session["mode"] == "room"
+    await client.disconnect()

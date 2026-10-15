@@ -26,14 +26,35 @@ export interface Session {
   nba?: NbaData
   /** Jira tickets drafted from the call, oldest first. */
   tickets?: TicketDraft[]
+  /** call: speakers told apart by channel. room: an in-room meeting, one mic, voices told apart (Speaker 1, 2…). */
+  mode?: SessionMode
+}
+
+export type SessionMode = 'call' | 'room'
+
+/** Minutes of an in-room meeting (summary status ready, kind minutes). */
+export interface MeetingMinutes {
+  status: 'ready'
+  kind: 'minutes'
+  provider: string
+  summary: string
+  attendees: string[]
+  discussion_points: string[]
+  decisions: string[]
+  action_items: string[]
+  open_issues: string[]
+  /** Done by the app during the meeting, e.g. "Jira ticket SCRUM-5 created: …". */
+  done: string[]
 }
 
 /** End-of-call analysis, made by the backend once a call stops. */
 export type CallSummary =
   | { status: 'pending' }
   | { status: 'unavailable' }
+  | MeetingMinutes
   | {
       status: 'ready'
+      kind?: undefined
       provider: string
       summary: string
       purpose: string
@@ -67,6 +88,7 @@ export interface SessionSummary {
   kind: 'live' | 'import'
   created_at: number
   participants: User[]
+  mode?: SessionMode
   preview: string
   summary: { status: CallSummary['status']; sentiment?: string } | null
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { getSession } from '../lib/api'
 import { savedFacts } from '../lib/assist'
 import { createdTickets } from '../lib/tickets'
-import { fromUtterance, type CallSummary, type Session } from '../lib/types'
+import { fromUtterance, type CallSummary, type MeetingMinutes, type Session } from '../lib/types'
 import { FactList } from './AssistPanel'
 
 interface Props {
@@ -85,6 +85,7 @@ function SummaryBlock({ summary }: { summary: CallSummary | null }) {
   if (!summary) return null
   if (summary.status === 'pending') return <p className="muted summary-box">Preparing summary…</p>
   if (summary.status === 'unavailable') return <p className="muted summary-box">Summary unavailable.</p>
+  if (summary.kind === 'minutes') return <MinutesBlock minutes={summary} />
   return (
     <section className="summary-box" aria-label="Call summary">
       <div className="summary-tags">
@@ -110,6 +111,55 @@ function SummaryBlock({ summary }: { summary: CallSummary | null }) {
             'None agreed'
           )}
         </dd>
+      </dl>
+    </section>
+  )
+}
+
+function ItemList({ items, empty }: { items: string[]; empty: string }) {
+  if (items.length === 0) return <>{empty}</>
+  return (
+    <ul>
+      {items.map((item, i) => (
+        <li key={i}>{item}</li>
+      ))}
+    </ul>
+  )
+}
+
+/** Minutes of an in-room meeting. */
+function MinutesBlock({ minutes }: { minutes: MeetingMinutes }) {
+  return (
+    <section className="summary-box" aria-label="Minutes of the meeting">
+      <h3>Minutes of the meeting</h3>
+      <p>{minutes.summary}</p>
+      <dl>
+        <dt>Attendees</dt>
+        <dd>{minutes.attendees.join(', ')}</dd>
+        <dt>Discussion</dt>
+        <dd>
+          <ItemList items={minutes.discussion_points} empty="Nothing recorded" />
+        </dd>
+        <dt>Decisions</dt>
+        <dd>
+          <ItemList items={minutes.decisions} empty="None" />
+        </dd>
+        <dt>Next steps</dt>
+        <dd>
+          <ItemList items={minutes.action_items} empty="None agreed" />
+        </dd>
+        <dt>Open issues</dt>
+        <dd>
+          <ItemList items={minutes.open_issues} empty="None" />
+        </dd>
+        {minutes.done.length > 0 && (
+          <>
+            <dt>Done in the meeting</dt>
+            <dd>
+              <ItemList items={minutes.done} empty="" />
+            </dd>
+          </>
+        )}
       </dl>
     </section>
   )

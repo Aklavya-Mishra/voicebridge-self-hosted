@@ -53,6 +53,23 @@ def is_call_speaker(speaker_id: str) -> bool:
     return speaker_id.endswith("-call")
 
 
+# In-room mode: one mic hears everyone; Deepgram tells the voices apart. Speaker n is "<user id>-room<n>".
+ROOM_SPEAKER_NAME = "Speaker"
+
+
+def room_speaker_id(user_id: str, number: int) -> str:
+    return f"{user_id}-room{number}"
+
+
+def is_room_speaker(speaker_id: str) -> bool:
+    return bool(re.search(r"-room\d+$", speaker_id))
+
+
+def room_speaker_name(speaker_id: str) -> str:
+    """The name of "<user id>-room2" until renamed: "Speaker 2"."""
+    return f"{ROOM_SPEAKER_NAME} {speaker_id.rsplit('-room', 1)[1]}"
+
+
 def empty_nba() -> dict:
     """Live hint state of a call (app.nba): hints shown, customer facts, domain found in auto mode."""
     return {"hints": [], "facts": {}, "detected": None, "fact_log": {}, "domain_since": 0}
@@ -88,6 +105,8 @@ class Session:
     nba: dict = field(default_factory=empty_nba)
     # Jira tickets drafted from the call (app.tickets), oldest first.
     tickets: list = field(default_factory=list)
+    # call: speakers told apart by channel (mic, call audio). room: one mic in a meeting room, by voice (app.room).
+    mode: str = "call"
 
     def to_dict(self) -> dict:
         return {
@@ -102,6 +121,7 @@ class Session:
             "speaker_names": self.speaker_names,
             "nba": self.nba,
             "tickets": self.tickets,
+            "mode": self.mode,
         }
 
 
@@ -122,7 +142,9 @@ CREATE INDEX IF NOT EXISTS utterances_by_code ON utterances(code, start_ts);
 """
 # Columns added after the first release; created on databases that predate them.
 # Older databases also have a `domain` column (the call type picked by hand, since removed); it is not read.
-_ADDED_COLUMNS = {"sessions": [("summary", "TEXT"), ("speaker_names", "TEXT"), ("nba", "TEXT"), ("tickets", "TEXT")]}
+_ADDED_COLUMNS = {
+    "sessions": [("summary", "TEXT"), ("speaker_names", "TEXT"), ("nba", "TEXT"), ("tickets", "TEXT"), ("mode", "TEXT")]
+}
 
 
 class _Db:
@@ -140,12 +162,12 @@ class _Db:
     def save_session(self, s: "Session") -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO sessions"
-            " (code, id, kind, created_by, created_at, participants, summary, speaker_names, nba, tickets)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " (code, id, kind, created_by, created_at, participants, summary, speaker_names, nba, tickets, mode)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 s.code, s.id, s.kind, s.created_by, s.created_at, json.dumps(s.participants),
                 json.dumps(s.summary) if s.summary is not None else None, json.dumps(s.speaker_names),
-                json.dumps(s.nba), json.dumps(s.tickets),
+                json.dumps(s.nba), json.dumps(s.tickets), s.mode,
             ),
         )
 
@@ -155,9 +177,12 @@ class _Db:
             (u.id, code, u.speaker_id, u.speaker_name, u.text, u.start_ts, u.end_ts),
         )
 
+    def delete_utterances(self, ids: list[str]) -> None:
+        self._conn.executemany("DELETE FROM utterances WHERE id = ?", [(i,) for i in ids])
+
     def load(self) -> list["Session"]:
         rows = self._conn.execute(
-            "SELECT code, id, kind, created_by, created_at, participants, summary, speaker_names, nba, tickets"
+            "SELECT code, id, kind, created_by, created_at, participants, summary, speaker_names, nba, tickets, mode"
             " FROM sessions"
         )
         sessions = {
@@ -167,8 +192,9 @@ class _Db:
                 speaker_names=json.loads(names) if names else {},
                 nba={**empty_nba(), **json.loads(nba)} if nba else empty_nba(),
                 tickets=json.loads(tickets) if tickets else [],
+                mode=mode or "call",
             )
-            for code, sid, kind, by, at, people, summary, names, nba, tickets in rows
+            for code, sid, kind, by, at, people, summary, names, nba, tickets, mode in rows
         }
         rows = self._conn.execute(
             "SELECT id, code, speaker_id, speaker_name, text, start_ts, end_ts FROM utterances ORDER BY start_ts"
@@ -208,8 +234,11 @@ class SessionStore:
             if code not in self._sessions:
                 return code
 
-    def create(self, user: dict, kind: str = "live") -> Session:
+    def create(self, user: dict, kind: str = "live", mode: str = "call") -> Session:
+        if mode not in ("call", "room"):
+            raise SessionError("mode must be call or room")
         session = Session(
+            mode=mode,
             id=uuid.uuid4().hex,
             code=self._new_code(),
             kind=kind,
@@ -264,6 +293,16 @@ class SessionStore:
         if self._db:
             self._db.save_utterance(session.code, utterance)
 
+    def replace_utterances(self, code: str, start_ts: float, end_ts: float, utterances: list[Utterance]) -> None:
+        """Swap the lines that start within [start_ts, end_ts] for `utterances` (a better transcript of that span)."""
+        session = self.get(code)
+        old = [u for u in session.transcript if start_ts <= u.start_ts <= end_ts]
+        session.transcript = [u for u in session.transcript if not start_ts <= u.start_ts <= end_ts]
+        if self._db:
+            self._db.delete_utterances([u.id for u in old])
+        for utterance in utterances:
+            self.add_utterance(code, utterance)
+
     def update_utterance_text(self, code: str, utterance_id: str, text: str) -> None:
         """Replace a saved line's text (used to mask sensitive values after the call)."""
         session = self.get(code)
@@ -293,10 +332,13 @@ class SessionStore:
         elif (
             speaker_id in session.speaker_names
             or speaker_id in spoken
+            # A room speaker heard live, before any of their lines was stored.
+            or (is_room_speaker(speaker_id) and speaker_id.rsplit("-room", 1)[0] in session.participants)
             # A participant's call audio, shown as soon as their agent starts, before it has said anything.
             or any(speaker_id == call_speaker_id(uid) for uid in session.participants)
         ):
-            old = session.speaker_names.get(speaker_id) or spoken.get(speaker_id) or CALL_SPEAKER_NAME
+            default = room_speaker_name(speaker_id) if is_room_speaker(speaker_id) else CALL_SPEAKER_NAME
+            old = session.speaker_names.get(speaker_id) or spoken.get(speaker_id) or default
             session.speaker_names[speaker_id] = name
         else:
             raise SessionNotFound("No such speaker in this call")
@@ -325,6 +367,13 @@ class SessionStore:
         session.summary = summary
         self._save(session)
 
+    def set_mode(self, code: str, mode: str) -> None:
+        if mode not in ("call", "room"):
+            raise SessionError("mode must be call or room")
+        session = self.get(code)
+        session.mode = mode
+        self._save(session)
+
     def set_tickets(self, code: str, tickets: list) -> None:
         session = self.get(code)
         session.tickets = tickets
@@ -348,6 +397,7 @@ class SessionStore:
                 "kind": s.kind,
                 "created_at": s.created_at,
                 "participants": [{"id": uid, "name": name} for uid, name in s.participants.items()],
+                "mode": s.mode,
                 "preview": s.transcript[0].text if s.transcript else "",
                 "summary": {"status": s.summary.get("status"), "sentiment": s.summary.get("sentiment")}
                 if s.summary

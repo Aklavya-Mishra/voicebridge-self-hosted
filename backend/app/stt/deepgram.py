@@ -16,6 +16,7 @@ from app.stt.base import STTProvider
 logger = logging.getLogger("voicebridge")
 
 REST_TIMEOUT_S = 30.0
+DIARIZE_TIMEOUT_S = 300.0  # a whole meeting (an hour is ~115 MB of audio)
 
 
 def pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
@@ -42,7 +43,8 @@ class DeepgramSTT:
         s = self._settings
         return {"model": s.deepgram_model, "language": s.deepgram_language, "smart_format": "true", "punctuate": "true"}
 
-    def live_url(self) -> str:
+    def live_url(self, diarize: bool = False) -> str:
+        """Streaming URL. With `diarize`, every word carries a speaker number (0, 1...) told apart by voice."""
         s = self._settings
         params = self._common_params() | {
             "encoding": "linear16",
@@ -51,6 +53,8 @@ class DeepgramSTT:
             "interim_results": "true",
             "endpointing": str(s.deepgram_endpointing_ms),
         }
+        if diarize:
+            params["diarize"] = "true"
         return f"{s.deepgram_url}?{urlencode(params)}"
 
     async def transcribe(self, pcm: bytes, sample_rate: int, language: str | None = None) -> str:
@@ -68,3 +72,21 @@ class DeepgramSTT:
         except Exception as exc:
             logger.warning("Deepgram transcription failed (%s); using %s", exc, self.fallback.name)
             return await self.fallback.transcribe(pcm, sample_rate, language)
+
+    async def diarize(self, pcm: bytes, sample_rate: int) -> list[dict]:
+        """Words of a whole recording with who said them: [{start, end, word, speaker}], times in seconds from its
+        start. Hearing all of it, Deepgram tells voices apart better than live, where the first minute is unsure.
+        Raises on any failure (there is no local fallback for this)."""
+        async with httpx.AsyncClient(transport=self._transport, timeout=DIARIZE_TIMEOUT_S) as client:
+            response = await client.post(
+                self._rest_url,
+                params=self._common_params() | {"diarize": "true"},
+                headers=self.headers | {"Content-Type": "audio/wav"},
+                content=pcm_to_wav(pcm, sample_rate),
+            )
+            response.raise_for_status()
+        words = response.json()["results"]["channels"][0]["alternatives"][0].get("words") or []
+        return [
+            {"start": w["start"], "end": w["end"], "word": w.get("punctuated_word") or w["word"], "speaker": w.get("speaker", 0)}
+            for w in words
+        ]

@@ -61,9 +61,19 @@ def list_sessions(request: Request, user: dict = Depends(current_user)) -> dict:
     return {"sessions": request.app.state.store.list_for(user["id"])}
 
 
+class CreateSessionRequest(BaseModel):
+    mode: str = "call"  # call | room (in-room meeting: one mic, voices told apart)
+
+
 @router.post("/sessions")
-def create_session(request: Request, user: dict = Depends(current_user)) -> dict:
-    return {"session": request.app.state.store.create(user).to_dict()}
+def create_session(
+    request: Request, body: CreateSessionRequest | None = None, user: dict = Depends(current_user)
+) -> dict:
+    try:
+        session = request.app.state.store.create(user, mode=(body or CreateSessionRequest()).mode)
+    except SessionError as exc:
+        raise _session_error(exc) from exc
+    return {"session": session.to_dict()}
 
 
 @router.get("/sessions/{code}")

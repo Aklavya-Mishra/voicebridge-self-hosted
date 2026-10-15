@@ -16,7 +16,13 @@ one per user):
   the call it records after a reconnect.
   server -> web: agent_status {online}
   The agent streams stereo audio_chunk (mic + speaker loopback) only into sessions it was started for.
+web -> server: set_mode {code, mode: call|room} -> ack {ok, error?} before recording; server -> room:
+  mode_changed {code, mode}.
+In-room sessions (mode "room"): one mic hears everyone. Only the mic is used (mono, or the left channel of the agent's
+  stereo); Deepgram tells the voices apart and lines go to "<user id>-room<n>" ("Speaker n" until renamed). When
+  the mic stops, the meeting audio is checked again as a whole and the transcript of that span is rebuilt (app.room).
 Server -> client: participants {code, participants}, transcript {...see pipeline payload},
+                  transcript_reset {code, transcript} when an in-room meeting's transcript was rebuilt,
                   stt_status {code, speaker, engine, reason} when a speaker falls back to local STT,
                   speaker_renamed {code, speaker_id, name},
                   live hints (app.nba): nba_hint {code, id, text, kind, intent, priority, ts},
@@ -39,8 +45,18 @@ from app.config import Settings
 from app.llm import LlmChain
 from app.nba.service import NbaService
 from app.pipeline import DeepgramParticipantStream, ParticipantStream
+from app.room import RoomRecorder, recheck
 from app.segmenter import Segmenter
-from app.sessions import CALL_SPEAKER_NAME, SessionError, SessionStore, Utterance, call_speaker_id, normalize_code
+from app.sessions import (
+    CALL_SPEAKER_NAME,
+    SessionError,
+    SessionStore,
+    Utterance,
+    call_speaker_id,
+    normalize_code,
+    room_speaker_id,
+    room_speaker_name,
+)
 from app.stt import STTProvider
 from app.stt.deepgram import DeepgramSTT
 from app.tickets import TicketService
@@ -101,9 +117,11 @@ class SocketHandlers:
         self._stream_speakers: dict[tuple[str, str], dict] = {}
         self._muted: set[tuple[str, str]] = set()  # (session code, user id) whose mic is muted
         self._closing: set[asyncio.Task] = set()  # streams being flushed in the background
+        self._room_audio = RoomRecorder(settings.sample_rate)  # in-room meetings' audio until re-checked
+        self._room_user: dict[str, str] = {}  # in-room session code -> user whose mic records it
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
-                  "agent_start", "agent_stop", "agent_ping", "rename_speaker", "mute_mic", "ticket_create",
-                  "ticket_dismiss")
+                  "agent_start", "agent_stop", "agent_ping", "rename_speaker", "mute_mic", "set_mode",
+                  "ticket_create", "ticket_dismiss")
         for name in events:
             sio.on(name, getattr(self, name))
 
@@ -251,6 +269,16 @@ class SocketHandlers:
             return
         user = self._speaker(code, state["user"])
         key = (code, user["id"])
+        if self._store.get(code).mode == "room":
+            if key in self._muted:
+                return
+            mic = bytes(audio) if channels == 1 else split_stereo(bytes(audio))[0]  # the computer's audio is not used
+            ts = self._chunk_ts(key, len(mic))
+            self._room_audio.add(code, mic, ts)
+            self._room_user[code] = user["id"]
+            stream = self._streams.get(key) or self._new_stream(code, user, self._room_speakers(code, user["id"]))
+            await stream.push(mic, ts)
+            return
         if channels == 1:
             await self._stream_for(code, user).push(bytes(audio), self._chunk_ts(key, len(audio)))
             return
@@ -307,8 +335,36 @@ class SocketHandlers:
         await self._broadcast_participants(code)
         return {"ok": True}
 
+    def _room_speakers(self, code: str, user_id: str):
+        """In-room mode: Deepgram's voice number -> the speaker it is recorded as (its dict is renamed in place)."""
+
+        def speaker_for(label: int) -> dict:
+            speaker_id = room_speaker_id(user_id, label + 1)
+            speaker = self._stream_speakers.get((code, speaker_id))
+            if speaker is None:
+                name = self._store.speaker_name(code, speaker_id, room_speaker_name(speaker_id))
+                speaker = self._stream_speakers[(code, speaker_id)] = {"id": speaker_id, "name": name}
+            return speaker
+
+        return speaker_for
+
     def _stream_for(self, code: str, speaker: dict) -> LiveStream:
         return self._streams.get((code, speaker["id"])) or self._new_stream(code, speaker)
+
+    async def set_mode(self, sid: str, data: dict) -> dict:
+        """Pick how the next recording tells speakers apart: call (by channel) or room (one mic, by voice)."""
+        state = await self._sio.get_session(sid)
+        code = normalize_code((data or {}).get("code"))
+        if code not in state["codes"]:
+            return {"ok": False, "error": "Join the session first"}
+        if any(c == code for c, _ in self._streams):
+            return {"ok": False, "error": "Stop the mic first"}
+        try:
+            self._store.set_mode(code, str((data or {}).get("mode") or ""))
+        except SessionError as exc:
+            return {"ok": False, "error": str(exc)}
+        await self._sio.emit("mode_changed", {"code": code, "mode": self._store.get(code).mode}, room=room_for(code))
+        return {"ok": True}
 
     async def mute_mic(self, sid: str, data: dict) -> dict:
         state = await self._sio.get_session(sid)
@@ -339,7 +395,8 @@ class SocketHandlers:
         await self._close_stream(code, state["user"]["id"])
         await self._sio.leave_room(sid, room_for(code))
 
-    def _new_stream(self, code: str, user: dict) -> LiveStream:
+    def _new_stream(self, code: str, user: dict, speaker_for=None) -> LiveStream:
+        """A live stream of `user`'s audio. With `speaker_for` (in-room), it holds several voices."""
         masking = self._settings.pii_masking
 
         async def emit(payload: dict) -> None:
@@ -371,24 +428,28 @@ class SocketHandlers:
                 if c == code and speaker_id != user["id"] and hasattr(other, "cut"):
                     await other.cut(ts)
 
+        # In-room, a local engine cannot tell voices apart: everything goes to the first speaker.
+        local_speaker = speaker_for(0) if speaker_for else user
         if isinstance(self._stt, DeepgramSTT):
             fallback = self._stt.fallback
             stream = DeepgramParticipantStream(
                 code=code,
-                speaker=user,
+                speaker=local_speaker,
                 stt=self._stt,
                 sample_rate=self._settings.sample_rate,
                 emit=emit,
                 on_final=on_final,
                 notify=notify,
-                make_fallback=lambda: self._local_stream(code, user, fallback, emit, on_final),
+                make_fallback=lambda: self._local_stream(code, local_speaker, fallback, emit, on_final),
                 on_start=on_start,
                 bubble_gap_s=self._settings.end_silence_ms / 1000,
+                speaker_for=speaker_for,
             )
         else:
-            stream = self._local_stream(code, user, self._stt, emit, on_final)
+            stream = self._local_stream(code, local_speaker, self._stt, emit, on_final)
         self._streams[(code, user["id"])] = stream
-        self._stream_speakers[(code, user["id"])] = user
+        if speaker_for is None:
+            self._stream_speakers[(code, user["id"])] = user
         return stream
 
     def _local_stream(self, code: str, user: dict, stt: STTProvider, emit, on_final) -> ParticipantStream:
@@ -417,16 +478,19 @@ class SocketHandlers:
 
     async def _close_stream(self, code: str, user_id: str) -> None:
         self._clocks.pop((code, user_id), None)
-        for speaker_id in (user_id, call_speaker_id(user_id)):
-            self._stream_speakers.pop((code, speaker_id), None)
+        mine = (user_id, call_speaker_id(user_id))
+        for key in [k for k in self._stream_speakers if k[0] == code]:
+            if key[1] in mine or key[1].startswith(f"{user_id}-room"):
+                del self._stream_speakers[key]
         streams = [self._streams.pop((code, sid), None) for sid in (user_id, call_speaker_id(user_id))]
         await asyncio.gather(*(stream.close() for stream in streams if stream is not None))
         if any(s is not None for s in streams) and not any(c == code for c, _ in self._streams):
             self._schedule_analysis(code)
 
     def _schedule_analysis(self, code: str) -> None:
-        """Summarise the call once nobody is streaming into it; a restarted mic postpones it."""
-        if not self._settings.call_analysis:
+        """Summarise the call once nobody is streaming into it; a restarted mic postpones it. An in-room meeting's
+        transcript is re-checked first."""
+        if not self._settings.call_analysis and self._store.get(code).mode != "room":
             return
         previous = self._analysis.pop(code, None)
         if previous:
@@ -436,6 +500,9 @@ class SocketHandlers:
             await asyncio.sleep(ANALYSIS_DELAY_S)
             if any(c == code for c, _ in self._streams):
                 return  # recording again; analysed when it stops
+            await self._recheck_room(code)
+            if not self._settings.call_analysis:
+                return
             await analyse_session(self._store, code, self._llm)
             if self._nba is not None:
                 self._nba.warm()  # the summary replaced the cached hint prompt in a local model
@@ -443,6 +510,20 @@ class SocketHandlers:
         task = asyncio.create_task(run())
         self._analysis[code] = task
         task.add_done_callback(lambda t: self._analysis.pop(code, None) if self._analysis.get(code) is t else None)
+
+    async def _recheck_room(self, code: str) -> None:
+        session = self._store.get(code)
+        if session.mode != "room":
+            return
+        user_id = self._room_user.pop(code, session.created_by)
+        s = self._settings
+        changed = await recheck(
+            self._store, code, user_id, self._room_audio.take(code), self._stt, s.sample_rate,
+            s.end_silence_ms / 1000, s.pii_masking,
+        )
+        if changed:
+            transcript = [u.to_dict() for u in self._store.get(code).transcript]
+            await self._sio.emit("transcript_reset", {"code": code, "transcript": transcript}, room=room_for(code))
 
     def _chunk_ts(self, key: tuple[str, str], nbytes: int) -> float:
         """Start time of this chunk: continue from the previous chunk unless the gap is too big."""
