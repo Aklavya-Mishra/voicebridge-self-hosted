@@ -7,7 +7,7 @@ from typing import Awaitable, Callable
 
 from aiohttp import web
 
-LOCAL_PORT = 47800
+LOCAL_PORT = 47801  # 47801 so it runs next to the main voicebridge agent (47800)
 
 
 def make_local_app(

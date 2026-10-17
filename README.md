@@ -145,7 +145,7 @@ Hints and Customer info are saved with the call and shown again under its summar
 Install: on the web app's home page click **Download agent (.exe)** and run it once. A notification says it
 is running; it lives in the system tray and starts with Windows (turn that off in Task Manager > Startup
 apps). Starting it a second time just shows "already running". There is nothing to configure: while you
-are signed in, the web app on the same PC hands the agent your sign-in over `127.0.0.1:47800` every 10 s
+are signed in, the web app on the same PC hands the agent your sign-in over `127.0.0.1:47801` every 10 s
 (only the VoiceBridge web origin is accepted), and the home page shows **Agent connected on this PC**.
 
 The agent records the Windows default microphone and the loopback of **every** output device (speakers,

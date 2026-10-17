@@ -5,7 +5,7 @@ VoiceBridge web app on the same PC: the page hands the agent your sign-in over 1
 connects to VoiceBridge as you. When you click Start in a call, it streams your microphone (left channel,
 you) and everything the PC plays (right channel, the other person) from any call app, with nothing shared.
 
-Dev run: python voicebridge_agent.py [--origin http://localhost:5173]
+Dev run: python voicebridge_agent.py [--origin http://localhost:5273]
 """
 import argparse
 import asyncio
@@ -23,9 +23,9 @@ from aiohttp import web
 from local_api import LOCAL_PORT, make_local_app
 from mixer import StereoMixer
 
-APP_NAME = "VoiceBridgeAgent"
-DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "VoiceBridge"
-DEFAULT_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+APP_NAME = "VoiceBridgeAgentSelfHosted"
+DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "VoiceBridge-SelfHosted"
+DEFAULT_ORIGINS = ["http://localhost:5273", "http://127.0.0.1:5273"]
 SEND_INTERVAL_S = 0.05
 LEVEL_LOG_INTERVAL_S = 10.0
 # The agent tells the server every few seconds that it is here and which call it records. After a reconnect
@@ -255,7 +255,7 @@ def start_tray(stop: threading.Event) -> Tray:
     draw.arc((8, 16, 56, 64), start=205, end=335, fill=(199, 210, 254, 255), width=4)
     for x, top in ((17, 30), (24, 26), (30, 24), (36, 26), (43, 30)):
         draw.rounded_rectangle((x, top, x + 4, 49), radius=2, fill=(255, 255, 255, 255))
-    icon = pystray.Icon(APP_NAME, image, "VoiceBridge Agent", menu=pystray.Menu(
+    icon = pystray.Icon(APP_NAME, image, "VoiceBridge Agent (self-hosted)", menu=pystray.Menu(
         pystray.MenuItem(lambda item: f"VoiceBridge: {icon.title.split(': ', 1)[-1]}", None, enabled=False),
         pystray.MenuItem("Quit", lambda: (stop.set(), icon.stop())),
     ))
