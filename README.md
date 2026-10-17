@@ -17,6 +17,11 @@ are still one setting away, so both can be compared on the same calls (`backend/
 `backend/tools/e2e_call.py`). See [Measured](#measured-self-hosted-cpu) and
 [docs/self-hosted.md](docs/self-hosted.md).
 
+What a call gets: a live transcript where several people on the call app are told apart and named from the
+conversation, live hints, [Jira tickets](#jira-tickets) raised by voice, and after the call a summary with each
+person's next steps on one line and a [Slack recap](#slack-recap). Runs next to the original (Deepgram) edition on
+other ports: backend 8001, web app 5273, agent 47801.
+
 Design: [docs/specs/2026-10-07-voicebridge-v1-design.md](docs/specs/2026-10-07-voicebridge-v1-design.md)
 
 ```
@@ -38,17 +43,17 @@ python -m venv .venv
 pip install -r requirements.txt
 python scripts/download_models.py   # once: ~500 MB of sherpa-onnx models into backend/models
 cp .env.example .env            # works as is: no key needed (add the Jira values for tickets)
-python run.py                   # http://localhost:8000
+python run.py                   # http://localhost:8001 (PORT in .env)
 
 # frontend (second terminal)
 cd frontend
 npm install
-npm run dev                     # http://localhost:5173
+npm run dev                     # http://localhost:5273
 ```
 
 ## Using it
 
-1. Open http://localhost:5173 and sign in with your name (the top-right pill shows the STT engine).
+1. Open http://localhost:5273 and sign in with your name (the top-right pill shows the STT engine).
 2. **Start session** (or **Join** with a code) and enter **Your name in this call**: it is recorded on your
    lines. The other person is recorded under the name they enter if they use VoiceBridge, or as
    **Computer** if their voice comes from your computer's audio. Then **Start mic**:
@@ -57,8 +62,12 @@ npm run dev                     # http://localhost:5173
 3. The chat shows your speech on the left and the other side on the right, one bubble per turn with
    its own time: a bubble keeps growing while the person talks and ends after 2 s of silence
    (`END_SILENCE_MS`), or as soon as the other side starts talking.
-   The ✎ next to a name in the call header renames that speaker for the whole call (e.g. **Computer** to
-   the caller's real name): earlier lines, new lines, the saved transcript and the summary.
+   Several people can be on the call app's side: their voices are told apart (ERes2Net voice prints,
+   `CALL_DIARIZE=true`) as **Computer**, **Computer 2**…, and each is named from what is said ("Priya, can you
+   retest it?" answered by that voice, "Will do, Vikram" after it, "Hi, Priya here"). On Stop the call audio is
+   checked again as a whole (pyannote + ERes2Net) and those lines are rebuilt, so voices split or merged live are
+   fixed in the saved transcript. The ✎ next to a name renames that speaker for the whole call (earlier lines,
+   new lines, the saved transcript and the summary); a name typed by hand is never replaced.
 4. **Transcript** downloads the call as text, one line per sentence:
 
    ```
@@ -75,9 +84,13 @@ npm run dev                     # http://localhost:5173
    shows its summary and transcript (`Name: text`, one line per sentence) with a Back button.
 7. Long numbers (card, phone, account) and emails are masked as `xxxxx` the moment a line is final, so they
    are never shown or saved in clear. When a call stops, it is analysed in the background (seconds on a
-   cloud model, ~15-25 s for a short call on CPU): summary, purpose, outcome, action items and the caller's
+   cloud model, ~45-50 s for a 2-minute call on CPU): summary, purpose, outcome, next steps and the caller's
    sentiment, plus masking of what patterns miss (expiry dates, CVVs, addresses,
-   numbers read out in words). People's names are never masked. The sentiment is rated in a second short
+   numbers read out in words). Next steps come from a request of their own, with the call sent one sentence
+   per line; each person's tasks are shown on one line in the order said ("Balram: Fix the coupon bug by
+   Wednesday evening. Implement the pagination on Thursday."). Asked within the summary, `qwen2.5:7b` dropped
+   one of two tasks given in one breath in most runs; asked alone, it kept every task in 5 of 5. A request for a
+   Jira ticket is a next step until the ticket is created. People's names are never masked. The sentiment is rated in a second short
    request (~1-3 s) from the caller's lines only (the call audio; in a call between two VoiceBridge users or an
    import, the person who did not start it), so a polite advisor does not soften an upset caller; a call where
    the caller never spoke has none.
@@ -140,6 +153,29 @@ Hints and Customer info are saved with the call and shown again under its summar
 - When Ollama is not running (or the model is not pulled), the panel says so and rule hints keep working.
   `NBA_ENABLED=false` turns live hints off.
 
+### Jira tickets
+
+Say "create a Jira ticket for ..." (either side of the call): the Assist panel drafts a ticket at once (the
+local model writes the title and description from the call) and creates it in Jira when you click **Create**,
+or right away with `JIRA_AUTO_CREATE=true`. On only when `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` and
+`JIRA_PROJECT_KEY` are set. Created tickets are listed under the call's summary and in the Slack recap.
+
+### Slack recap
+
+When a call's summary is ready it is posted to `SLACK_RECAP_CHANNEL` as you (user token with `chat:write`),
+with the summary, outcome, next steps and links to the Jira tickets; when the summary changes (a ticket created
+after the call, a rename) the same message is edited. The call's page shows **Recap sent to #channel** with a
+link. Optional `SLACK_BOT_TOKEN` (`users:read`) turns names into @mentions. Only the summary is posted, never
+the transcript.
+
+### Live text
+
+Each sentence is transcribed in full when it ends: that final line is what is saved and used for hints,
+tickets, the summary and Slack. While it grows, grey live text is refreshed every `PARTIAL_INTERVAL_MS`
+(1.5 s) by transcribing the sentence so far again. On a 2-minute test call these refreshes took about 70% of
+speech-to-text CPU (`PARTIALS_ENABLED=false` turns live text off). Reading only the newest audio for live text
+is being tested on the `self-hosted` branch (-24% CPU, same final text).
+
 ### Desktop agent (Windows)
 
 Install: on the web app's home page click **Download agent (.exe)** and run it once. A notification says it
@@ -168,7 +204,7 @@ For a web app on another address, add `--origin https://your-host` (or set `VOIC
 
 ### Try a call with two endpoints
 
-1. Open http://localhost:5173, sign in, **Start session**, note the invite code.
+1. Open http://localhost:5273, sign in, **Start session**, note the invite code.
 2. Second participant: another browser profile or machine on the LAN (`npm run dev` listens on all interfaces), sign in with another name, **Join** with the code.
    Or simulate one: `python tools/simulate_participant.py --code <CODE>` (add `--wav file.wav` to stream real speech).
 3. Each person clicks **Start mic** > **Mic only**. Your speech appears on the left, theirs on the right.
@@ -215,6 +251,31 @@ The voices in these tests are synthetic (one male, one female); real rooms, acce
 worse. Compare against Deepgram on the same files: `python tools/eval_stt.py --engines sherpa,deepgram --diarize`
 (needs `DEEPGRAM_API_KEY`).
 
+**Same call through both editions, 2026-10-17** (Ryzen 9 9950X3D, CPU only, watched in the web app): a 134 s call,
+you on the mic and four people (Vikram, Priya, Balram, Sarah) on the call app, two Jira requests.
+
+| What | Self-hosted (this repo) | Deepgram edition |
+|---|---|---|
+| Word error rate, final text | 2.87% (character error rate 0.82%) | 2.87% (0.89%) |
+| Voices told apart / lines named right | 4 of 4 / 8 of 8 | 3 of 4 / 6 of 8 |
+| Final line after speech ends (median) | 1.8 s | 3.0 s |
+| Live text update | every 1.5 s | ~1.0 s, word by word |
+| Jira tickets drafted and created | 2 of 2 | 2 of 2 |
+| Next steps | 6 of 6, one line per person | - |
+| Summary / Slack recap after Stop (`qwen2.5:7b`, CPU) | 49 s / 50 s | 46 s / 53 s |
+| Backend CPU per call | 0.39 cores (incl. the re-check after Stop), ~1.1 GB RAM | 0.01 cores |
+
+## Scaling to 2,000 users (estimate)
+
+For 2,000 people on calls 8 h a day, 22 days a month (all on calls at once), sized from the measurements above:
+speech-to-text on ~143 CPU servers (16 vCPU each, ~14 calls per server), the model (hints, tickets, summaries)
+on ~17 H100 GPUs with Qwen 32B served by vLLM (prefix caching keeps the fixed hint prompt from being re-read),
+plus a load balancer, PostgreSQL, Redis and monitoring: about $34k a month on AWS + Hyperstack, ~$17 per user
+(~$15 with the live-text change being tested on the `self-hosted` branch), or ~$10 per user with Hetzner
+dedicated servers for speech. With Deepgram instead of local speech-to-text it is
+~$177-238 per user. Details, alternatives and sources: the VoiceBridge Confluence space, page "6. Cost estimates".
+Before that scale the backend needs PostgreSQL instead of SQLite and Redis to share calls between servers.
+
 ## Tests
 
 ```bash
@@ -241,6 +302,8 @@ cd backend && .venv/Scripts/python tools/e2e_call.py --mode call   # or --mode r
 - Proper names are often misheard.
 - `sherpa` (Parakeet) is English only; for Hindi use `whisper`, or `deepgram` with `DEEPGRAM_LANGUAGE=multi`.
 - Live text with `sherpa` comes in steps (each `PARTIAL_INTERVAL_MS`), not word by word as with Deepgram.
+- The Slack recap posts as the person whose token is set; per-person Slack sign-in is not built yet.
+- With `qwen2.5:7b` on CPU a hint takes ~6 s and the summary ~45-50 s; GPUs bring this down (see Scaling).
 - In-room voice separation with `sherpa` was tuned on synthetic voices only (`SHERPA_SPEAKER_THRESHOLD`).
 - One Ollama serves hints, Jira drafts and summaries: keep one context size (`NBA_NUM_CTX` empty), or Ollama
   reloads the model between them; Ollama 0.40.4 hung a summary that way. Another app using the same model at another
