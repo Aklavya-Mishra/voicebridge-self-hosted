@@ -561,6 +561,8 @@ class SocketHandlers:
             on_final=on_final,
             voices=voices,
             speaker_for=speaker_for if voices else None,
+            partial_window_s=s.partial_window_ms / 1000,
+            partial_keep_s=s.partial_keep_ms / 1000,
         )
 
     async def _close_stream(self, code: str, user_id: str) -> None:

@@ -64,6 +64,8 @@ class ParticipantStream:
         on_final: OnFinal,
         voices=None,  # in-room: a VoiceTracker (app.stt.sherpa) giving each line's voice number
         speaker_for: Callable[[int], dict] | None = None,  # in-room: voice number -> speaker
+        partial_window_s: float = 0,  # live text reads at most this much new audio; 0: the whole line each time
+        partial_keep_s: float = 1.5,  # words in the last seconds stay open to correction
     ):
         self._code = code
         self._speaker = speaker  # in-room: the speaker of the latest line, shown on live text
@@ -79,6 +81,11 @@ class ParticipantStream:
         self._partial_busy: set[str] = set()
         self._finalized: set[str] = set()
         self._tasks: set[asyncio.Task] = set()
+        # Live text of a growing line, read a window at a time (needs a provider with word timings). Re-reading the
+        # whole line every interval took 70% of speech-to-text CPU on a test call; the final pass still reads it all.
+        self._window_s = partial_window_s if hasattr(stt, "transcribe_words") else 0
+        self._keep_s = partial_keep_s
+        self._live: dict[str, tuple[list[str], int]] = {}  # utterance id -> (fixed words, bytes of audio they cover)
 
     async def push(self, pcm: bytes, ts: float) -> None:
         for segment in self._segmenter.feed(pcm, ts):
@@ -101,6 +108,7 @@ class ParticipantStream:
             self._spawn(self._run_partial(segment))
         elif segment.kind == CANCEL:
             self._finalized.add(segment.utterance_id)
+            self._live.pop(segment.utterance_id, None)
             await self._emit(self._payload(segment, "", final=True))
         else:
             self._spawn(self._run_final(segment))
@@ -121,11 +129,36 @@ class ParticipantStream:
 
     async def _run_partial(self, segment: Segment) -> None:
         try:
-            text = await self._transcribe(segment.pcm)
+            text = await (self._windowed_text(segment) if self._window_s else self._transcribe(segment.pcm))
         finally:
             self._partial_busy.discard(segment.utterance_id)
         if text and segment.utterance_id not in self._finalized:
             await self._emit(self._payload(segment, text, final=False))
+
+    async def _windowed_text(self, segment: Segment) -> str:
+        """Live text that reads only the audio after the words already fixed. Once that tail is longer than the
+        window, its words before the last `keep` seconds are fixed and the tail restarts at the next word."""
+        fixed, cut = self._live.get(segment.utterance_id, ([], 0))
+        tail = segment.pcm[cut:]
+        async with self._semaphore:
+            try:
+                words = await self._stt.transcribe_words(tail, self._sample_rate, self._language)
+            except Exception:
+                logger.exception("STT failed for session %s", self._code)
+                return ""
+        tail_s = len(tail) / 2 / self._sample_rate
+        if tail_s > self._window_s:
+            done = 0
+            while done < len(words) and words[done][1] <= tail_s - self._keep_s:
+                done += 1
+            if done:
+                at = words[done][0] if done < len(words) else words[done - 1][1]
+                fixed = fixed + [w[2] for w in words[:done]]
+                cut += int(at * self._sample_rate) * 2  # whole PCM16 samples
+                words = words[done:]
+                if segment.utterance_id not in self._finalized:
+                    self._live[segment.utterance_id] = (fixed, cut)
+        return clean_transcript(" ".join(fixed + [w[2] for w in words]))
 
     async def _voice_of(self, pcm: bytes) -> dict:
         """In-room: who said this line, by voice print. Otherwise the stream's one speaker."""
@@ -142,6 +175,7 @@ class ParticipantStream:
     async def _run_final(self, segment: Segment) -> None:
         text, speaker = await asyncio.gather(self._transcribe(segment.pcm), self._voice_of(segment.pcm))
         self._finalized.add(segment.utterance_id)
+        self._live.pop(segment.utterance_id, None)
         if text:
             await self._on_final(
                 Utterance(

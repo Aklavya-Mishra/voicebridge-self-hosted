@@ -175,6 +175,14 @@ class SherpaSTT:
             raise ValueError(f"sherpa expects {self._rate} Hz audio, got {sample_rate}")
         return await asyncio.to_thread(lambda: self._decode(_samples(pcm)).text.strip())
 
+    async def transcribe_words(
+        self, pcm: bytes, sample_rate: int, language: str | None = None
+    ) -> list[tuple[float, float, str]]:
+        """(start, end, word) in seconds from the clip's start: lets live text read only new audio."""
+        if sample_rate != self._rate:
+            raise ValueError(f"sherpa expects {self._rate} Hz audio, got {sample_rate}")
+        return await asyncio.to_thread(self._words, _samples(pcm), 0.0)
+
     # --- in-room: who spoke when
 
     def _embedding_config(self):

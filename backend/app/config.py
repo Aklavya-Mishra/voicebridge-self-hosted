@@ -30,6 +30,9 @@ class Settings:
     preroll_ms: int = 200
     partials_enabled: bool = True
     partial_interval_ms: int = 1500
+    # Live text reads at most this much new audio of a line (word-timed providers: sherpa); 0 rereads the whole line.
+    partial_window_ms: int = 2000
+    partial_keep_ms: int = 800  # the last words of live text stay open to correction
 
     stt_provider: str = "whisper"  # deepgram (cloud) | sherpa (local Parakeet) | whisper (local faster-whisper) | mock
     stt_fallback: str = "whisper"  # deepgram only: local provider used when Deepgram is unreachable
@@ -129,6 +132,8 @@ class Settings:
             preroll_ms=int(env("PREROLL_MS", cls.preroll_ms)),
             partials_enabled=_bool(env("PARTIALS_ENABLED", str(cls.partials_enabled))),
             partial_interval_ms=int(env("PARTIAL_INTERVAL_MS", cls.partial_interval_ms)),
+            partial_window_ms=int(env("PARTIAL_WINDOW_MS", cls.partial_window_ms)),
+            partial_keep_ms=int(env("PARTIAL_KEEP_MS", cls.partial_keep_ms)),
             stt_provider=env("STT_PROVIDER", cls.stt_provider).lower(),
             stt_fallback=env("STT_FALLBACK", cls.stt_fallback).lower(),
             stt_language=env("STT_LANGUAGE") or None,
