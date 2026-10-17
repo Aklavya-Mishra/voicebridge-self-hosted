@@ -2,7 +2,7 @@ import { API_BASE } from './api'
 
 /** The desktop agent listens here on the same PC (see agent/local_api.py). */
 const AGENT_URL = 'http://127.0.0.1:47801'
-export const AGENT_DOWNLOAD = '/downloads/VoiceBridgeAgent.exe'
+export const AGENT_DOWNLOAD = '/downloads/VoiceBridge-SelfHosted-Agent.exe'
 
 /**
  * Hands the agent this sign-in so it can connect to VoiceBridge as the same user.

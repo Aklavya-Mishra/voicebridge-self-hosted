@@ -1,4 +1,5 @@
-"""Jira tickets drafted from the call, created only when the advisor clicks Create (human in the loop).
+"""Jira tickets drafted from the call, created when the advisor clicks Create (human in the loop), or straight
+away when JIRA_AUTO_CREATE is on.
 
 SocketHandlers calls on_final() for every finished line of either speaker. A line that asks for a ticket
 ("create a Jira ticket where transcription has issues") opens a draft at once (status drafting); the local
@@ -146,6 +147,8 @@ class TicketService:
             return
         draft.update(title=mask_text(title), description=mask_text(description), status="ready")
         await self._put(code, draft)
+        if self._settings.jira_auto_create:
+            await self.create(code, ticket_id, draft["title"], draft["description"])
 
     def _recent(self, code: str, trigger: Utterance) -> list[str]:
         """The last lines of the call up to the request, as "Speaker: text"."""

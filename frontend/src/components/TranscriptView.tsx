@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { getSession } from '../lib/api'
+import { getSession, health, sendRecap } from '../lib/api'
 import { savedFacts } from '../lib/assist'
 import { createdTickets } from '../lib/tickets'
-import { fromUtterance, type CallSummary, type MeetingMinutes, type Session } from '../lib/types'
+import { fromUtterance, type CallSummary, type MeetingMinutes, type Session, type SlackRecap } from '../lib/types'
 import { FactList } from './AssistPanel'
 
 interface Props {
@@ -17,7 +17,17 @@ const POLL_MS = 3000
 export function TranscriptView({ code, token, onBack }: Props) {
   const [session, setSession] = useState<Session | null>(null)
   const [error, setError] = useState('')
-  const pending = session?.summary?.status === 'pending'
+  const [slackOn, setSlackOn] = useState(false)
+  // Right after a call: the summary is being made, or it is ready and its Slack recap is on its way.
+  const pending =
+    session?.summary?.status === 'pending' ||
+    (slackOn && session?.kind === 'live' && session.summary?.status === 'ready' && !session.recap)
+
+  useEffect(() => {
+    health()
+      .then((h) => setSlackOn(Boolean(h.slack_recap)))
+      .catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     getSession(token, code)
@@ -25,7 +35,7 @@ export function TranscriptView({ code, token, onBack }: Props) {
       .catch((err: Error) => setError(err.message))
   }, [code, token])
 
-  // While the summary is being made (right after a call), check back until it is ready.
+  // Until the summary (and its recap) is ready, check back.
   useEffect(() => {
     if (!pending) return
     const timer = setInterval(() => {
@@ -46,6 +56,16 @@ export function TranscriptView({ code, token, onBack }: Props) {
       </div>
       {error && <p className="error">{error}</p>}
       {session && lines.length > 0 && <SummaryBlock summary={session.summary} />}
+      {session && slackOn && session.kind === 'live' && session.summary?.status === 'ready' && (
+        <RecapLine
+          recap={session.recap ?? null}
+          onRetry={() =>
+            sendRecap(token, code)
+              .then((r) => setSession({ ...session, recap: r.recap }))
+              .catch((err: Error) => setSession({ ...session, recap: { status: 'failed', error: err.message } }))
+          }
+        />
+      )}
       {session && session.nba && Object.keys(savedFacts(session.nba)).length > 0 && (
         <section className="summary-box" aria-label="Customer info">
           {/* Hints during the call are hidden for now; restore these two lines to show them again.
@@ -78,6 +98,40 @@ export function TranscriptView({ code, token, onBack }: Props) {
         </p>
       ))}
     </div>
+  )
+}
+
+function RecapLine({ recap, onRetry }: { recap: SlackRecap | null; onRetry: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false)
+  if (!recap) return <p className="muted small recap-line">Sending recap to Slack…</p>
+  const channel = recap.name ? `#${recap.name}` : 'Slack'
+  if (recap.status === 'sent')
+    return (
+      <p className="small recap-line" role="status">
+        ✓ Recap sent to {channel}
+        {recap.permalink && (
+          <>
+            {' · '}
+            <a href={recap.permalink} target="_blank" rel="noreferrer">
+              Open in Slack
+            </a>
+          </>
+        )}
+      </p>
+    )
+  return (
+    <p className="small recap-line error" role="alert">
+      Recap not sent to Slack: {recap.error || 'unknown error'}{' '}
+      <button
+        disabled={busy}
+        onClick={() => {
+          setBusy(true)
+          void onRetry().finally(() => setBusy(false))
+        }}
+      >
+        {busy ? 'Sending…' : 'Retry'}
+      </button>
+    </p>
   )
 }
 

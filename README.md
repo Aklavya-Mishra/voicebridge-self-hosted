@@ -55,7 +55,7 @@ npm run dev                     # http://localhost:5173
    - desktop agent running: **Start** captures your mic and the computer's audio (the call);
    - no agent: **Mic only** transcribes just your side (the dialog says the agent is not running).
 3. The chat shows your speech on the left and the other side on the right, one bubble per turn with
-   its own time: a bubble keeps growing while the person talks and ends after 3 s of silence
+   its own time: a bubble keeps growing while the person talks and ends after 2 s of silence
    (`END_SILENCE_MS`), or as soon as the other side starts talking.
    The ✎ next to a name in the call header renames that speaker for the whole call (e.g. **Computer** to
    the caller's real name): earlier lines, new lines, the saved transcript and the summary.
@@ -160,7 +160,7 @@ Build the .exe (also copies it to `frontend/public/downloads/` for the download 
 cd agent
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-powershell -ExecutionPolicy Bypass -File build.ps1      # -> agent\dist\VoiceBridgeAgent.exe
+powershell -ExecutionPolicy Bypass -File build.ps1      # -> agent\dist\VoiceBridge-SelfHosted-Agent.exe
 ```
 
 Run from source instead (logs to the console): `.venv\Scripts\python voicebridge_agent.py`.

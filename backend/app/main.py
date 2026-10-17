@@ -13,6 +13,7 @@ from app.nba.service import NbaService
 from app.sessions import SessionStore
 from app.socket_events import SocketHandlers, room_for
 from app.stt import STTProvider, make_stt
+from app.recap import RecapService
 from app.tickets import TicketService
 
 logger = logging.getLogger("voicebridge")
@@ -69,6 +70,11 @@ def create_app(
     if settings.tickets_enabled:
         logger.info("Jira tickets into project %s at %s", settings.jira_project_key, settings.jira_url)
         tickets = TicketService(store, settings, nba_llm, jira or JiraClient(settings), room_emit)
-    SocketHandlers(sio, store, settings, stt, llm, nba, tickets)
+    recap = None
+    if settings.slack_recap_enabled:
+        logger.info("Slack recaps into #%s", settings.slack_recap_channel)
+        recap = RecapService(store, settings, room_emit)
+    api.state.recap = recap
+    SocketHandlers(sio, store, settings, stt, llm, nba, tickets, recap)
     # At start, have the hint model read its fixed prompt (~20 s on CPU) before the first call needs it.
     return socketio.ASGIApp(sio, other_asgi_app=api, on_startup=nba.warm if nba else None)

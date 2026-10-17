@@ -93,7 +93,7 @@ export default function App() {
         <div className="topbar-right">
           {auth &&
             (agentFound ? (
-              <span className="pill ok" title="The VoiceBridge Agent on this PC captures your mic and the computer's audio">
+              <span className="pill ok" title="The VoiceBridge Self-Hosted Agent on this PC captures your mic and the computer's audio">
                 ● Agent connected
               </span>
             ) : (
@@ -101,7 +101,7 @@ export default function App() {
                 className="pill warn"
                 href={AGENT_DOWNLOAD}
                 download
-                title="The VoiceBridge Agent (Windows) captures your mic and the computer's audio from any call app, without sharing your screen. Download it and run it once; it stays in the system tray."
+                title="The VoiceBridge Self-Hosted Agent (Windows) captures your mic and the computer's audio from any call app, without sharing your screen. Download it and run it once; it stays in the system tray."
               >
                 ○ Agent off · Get it
               </a>

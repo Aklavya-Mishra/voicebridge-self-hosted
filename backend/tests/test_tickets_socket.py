@@ -91,7 +91,7 @@ async def test_ticket_events_need_the_call_joined(ticket_server):
 
 
 async def test_ticket_created_after_the_summary_summarises_again(settings):
-    from app.analysis import ANALYSIS_SCHEMA
+    from app.analysis import ANALYSIS_SCHEMA, NEXT_STEPS_SCHEMA
     from app.llm import LlmChain
 
     class SummaryLLM:
@@ -103,8 +103,9 @@ async def test_ticket_created_after_the_summary_summarises_again(settings):
         async def json(self, system, user, schema):
             if schema is ANALYSIS_SCHEMA:
                 self.summary_inputs.append(user)
-                return {"summary": "s", "purpose": "p", "outcome": "No clear outcome", "pii": [],
-                        "action_items": ["Aklavya will raise a Jira ticket for the crash"]}
+                return {"summary": "s", "purpose": "p", "outcome": "No clear outcome", "pii": []}
+            if schema is NEXT_STEPS_SCHEMA:
+                return {"action_items": [], "ticket_requests": ["Raise a Jira ticket for the crash"]}
             return {"sentiment": "negative"}
 
     summary_llm = SummaryLLM()
@@ -143,15 +144,15 @@ async def test_ticket_created_after_the_summary_summarises_again(settings):
         # The call ends and is summarised before anyone clicks Create.
         assert await wait_for(lambda: drafts and drafts[-1]["status"] == "ready" and len(summary_llm.summary_inputs) == 1)
         for _ in range(50):
-            if (await summary() or {}).get("status") == "ready":
+            s = await summary() or {}
+            if s.get("status") == "ready":
                 break
             await asyncio.sleep(0.1)
-        assert "Done during the call" not in summary_llm.summary_inputs[0]
+        assert s["action_items"] == ["Raise a Jira ticket for the crash."]  # asked for, not created yet
 
         ack = await client.call("ticket_create", {"code": code, "id": drafts[-1]["id"], "title": "T", "description": ""})
         assert ack["ok"]
         assert await wait_for(lambda: len(summary_llm.summary_inputs) == 2)
-        assert '- Jira ticket SCRUM-5 created: "T"' in summary_llm.summary_inputs[1]
         for _ in range(50):
             s = await summary()
             if s.get("status") == "ready" and s["outcome"] != "No clear outcome":

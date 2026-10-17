@@ -37,6 +37,7 @@ def health(request: Request) -> dict:
         "stt_provider": request.app.state.stt.name,
         "nba": settings.nba_enabled,
         "tickets": settings.tickets_enabled,
+        "slack_recap": settings.slack_recap_enabled,
     }
 
 
@@ -82,6 +83,22 @@ def get_session(code: str, request: Request, user: dict = Depends(current_user))
         return {"session": request.app.state.store.require_participant(code, user).to_dict()}
     except SessionError as exc:
         raise _session_error(exc) from exc
+
+
+@router.post("/sessions/{code}/recap")
+async def send_recap(code: str, request: Request, user: dict = Depends(current_user)) -> dict:
+    """Send the Slack recap again (Retry after a failure)."""
+    try:
+        request.app.state.store.require_participant(code, user)
+    except SessionError as exc:
+        raise _session_error(exc) from exc
+    recap_service = getattr(request.app.state, "recap", None)
+    if recap_service is None:
+        raise HTTPException(status_code=409, detail="Slack recap is turned off")
+    recap = await recap_service.send(code)
+    if recap is None:
+        raise HTTPException(status_code=409, detail="The summary is not ready")
+    return {"recap": recap}
 
 
 @router.post("/import")

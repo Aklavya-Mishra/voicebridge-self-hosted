@@ -253,6 +253,9 @@ main.wide {
   padding: 0.75rem 1rem;
   margin-bottom: 1.25rem;
 }
+.recap-line {
+  margin: -0.5rem 0 1.25rem;
+}
 .summary-box p {
   margin: 0.5rem 0;
   line-height: 1.5;
@@ -490,7 +493,7 @@ main.wide {
   border-top-right-radius: 4px;
 }
 .partial-text {
-  opacity: 0.7;
+  opacity: 0.8;
   font-style: italic;
 }
 .bubble-meta {
@@ -500,9 +503,6 @@ main.wide {
   font-size: 0.72rem;
   opacity: 0.75;
   margin-bottom: 0.15rem;
-}
-.typing {
-  opacity: 0.7;
 }
 
 .channel-pick {

@@ -1,4 +1,4 @@
-import type { Session, SessionMode, SessionSummary, User } from './types'
+import type { Session, SessionMode, SessionSummary, SlackRecap, User } from './types'
 
 // Empty base means same origin (the Vite dev server proxies /api and /socket.io).
 export const API_BASE: string = import.meta.env.VITE_API_URL ?? ''
@@ -34,6 +34,9 @@ export const listSessions = (token: string) => request<{ sessions: SessionSummar
 
 export const fetchMe = (token: string) => request<{ user: User }>('/api/auth/me', {}, token)
 
+export const sendRecap = (token: string, code: string) =>
+  request<{ recap: SlackRecap }>(`/api/sessions/${encodeURIComponent(code)}/recap`, { method: 'POST' }, token)
+
 export const getSession = (token: string, code: string) =>
   request<{ session: Session }>(`/api/sessions/${encodeURIComponent(code)}`, {}, token)
 
@@ -51,4 +54,4 @@ export const importRecording = (token: string, file: File, meChannel: 'left' | '
   return request<{ session: Session }>('/api/import', { method: 'POST', body: form }, token)
 }
 
-export const health = () => request<{ status: string; stt_provider: string; nba?: boolean; tickets?: boolean }>('/api/health')
+export const health = () => request<{ status: string; stt_provider: string; nba?: boolean; tickets?: boolean; slack_recap?: boolean }>('/api/health')

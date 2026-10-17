@@ -44,7 +44,7 @@ async def login(client, name="Asha") -> dict:
 
 async def test_health(client):
     r = await client.get("/api/health")
-    assert r.json() == {"status": "ok", "stt_provider": "fake", "nba": False, "tickets": False}
+    assert r.json() == {"status": "ok", "stt_provider": "fake", "nba": False, "tickets": False, "slack_recap": False}
 
 
 async def test_session_endpoints_require_auth(client):

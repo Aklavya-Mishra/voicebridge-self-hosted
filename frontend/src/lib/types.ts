@@ -28,6 +28,16 @@ export interface Session {
   tickets?: TicketDraft[]
   /** call: speakers told apart by channel. room: an in-room meeting, one mic, voices told apart (Speaker 1, 2…). */
   mode?: SessionMode
+  /** Slack recap of the summary, once it was sent (or failed). */
+  recap?: SlackRecap | null
+}
+
+export interface SlackRecap {
+  status: 'sent' | 'failed'
+  /** Channel name, e.g. voicebridge-recaps. */
+  name?: string
+  permalink?: string | null
+  error?: string
 }
 
 export type SessionMode = 'call' | 'room'

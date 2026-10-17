@@ -213,3 +213,21 @@ async def test_drafting_does_not_block_the_caller():
     assert asyncio.get_running_loop().time() - started < 0.1
     assert store.get(code).tickets[0]["status"] == "drafting"
     await service.drain()
+
+
+async def test_auto_create_creates_the_ticket_without_a_click():
+    from dataclasses import replace
+
+    store = SessionStore()
+    code = store.create(ME).code
+    jira = FakeJira()
+
+    async def emit(c, event, payload):
+        pass
+
+    service = TicketService(store, replace(SETTINGS, jira_auto_create=True),
+                            FakeLLM({"title": "OTP retry fails", "description": "d"}), jira, emit)
+    await say(service, store, code, "please create a Jira ticket for the OTP retry failing")
+    ticket = store.get(code).tickets[0]
+    assert ticket["status"] == "created" and ticket["key"] == "SCRUM-5"
+    assert jira.created == [("OTP retry fails", "d")]

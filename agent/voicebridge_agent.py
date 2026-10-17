@@ -255,8 +255,8 @@ def start_tray(stop: threading.Event) -> Tray:
     draw.arc((8, 16, 56, 64), start=205, end=335, fill=(199, 210, 254, 255), width=4)
     for x, top in ((17, 30), (24, 26), (30, 24), (36, 26), (43, 30)):
         draw.rounded_rectangle((x, top, x + 4, 49), radius=2, fill=(255, 255, 255, 255))
-    icon = pystray.Icon(APP_NAME, image, "VoiceBridge Agent (self-hosted)", menu=pystray.Menu(
-        pystray.MenuItem(lambda item: f"VoiceBridge: {icon.title.split(': ', 1)[-1]}", None, enabled=False),
+    icon = pystray.Icon(APP_NAME, image, "VoiceBridge Self-Hosted Agent", menu=pystray.Menu(
+        pystray.MenuItem(lambda item: f"VoiceBridge Self-Hosted: {icon.title.split(': ', 1)[-1]}", None, enabled=False),
         pystray.MenuItem("Quit", lambda: (stop.set(), icon.stop())),
     ))
     icon.run_detached()
@@ -264,12 +264,12 @@ def start_tray(stop: threading.Event) -> Tray:
     class IconTray(Tray):
         def set_state(self, text: str) -> None:
             super().set_state(text)
-            icon.title = f"VoiceBridge Agent: {text}"
+            icon.title = f"VoiceBridge Self-Hosted Agent: {text}"
             icon.update_menu()
 
         def notify(self, text: str) -> None:
             super().notify(text)
-            icon.notify(text, "VoiceBridge Agent")
+            icon.notify(text, "VoiceBridge Self-Hosted Agent")
 
         def close(self) -> None:
             icon.stop()
@@ -284,12 +284,12 @@ async def serve(origins: list[str], stop: threading.Event, tray: Tray) -> None:
     try:
         await web.TCPSite(runner, "127.0.0.1", LOCAL_PORT).start()
     except OSError:
-        tray.notify("VoiceBridge Agent is already running (see the tray icon).")
+        tray.notify("VoiceBridge Self-Hosted Agent is already running (see the tray icon).")
         await asyncio.sleep(3)  # let the notification show before the icon goes away
         return
     logger.info("Agent ready on 127.0.0.1:%d; open the VoiceBridge web app (%s)", LOCAL_PORT, ", ".join(origins))
     tray.set_state("Waiting for the web app")
-    tray.notify("VoiceBridge Agent is running in the tray. Open the VoiceBridge web app to connect.")
+    tray.notify("VoiceBridge Self-Hosted Agent is running in the tray. Open the self-hosted VoiceBridge web app to connect.")
     while not stop.is_set():
         await asyncio.sleep(0.5)
     if agent.status()["recording"]:

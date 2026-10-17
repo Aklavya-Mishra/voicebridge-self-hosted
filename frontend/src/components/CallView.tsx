@@ -5,7 +5,7 @@ import { addHint, hintsNewestFirst } from '../lib/assist'
 import { MicCapture } from '../lib/mic'
 import { hasConsented, saveConsent } from '../lib/storage'
 import { upsertTicket } from '../lib/tickets'
-import { roomSpeakerIds, roomSpeakerName } from '../lib/room'
+import { callSpeakerIds, callSpeakerName, roomSpeakerIds, roomSpeakerName } from '../lib/room'
 import { formatTranscript } from '../lib/transcript'
 import {
   fromUtterance,
@@ -284,7 +284,9 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
   // The call-audio side (desktop agent): "Computer" until renamed.
   const callSpeakerId = `${me.id}-call`
   const callSideName = speakerNames[callSpeakerId] ?? 'Computer'
-  const hasCallSide = viaAgent || sorted.some((m) => m.speakerId === callSpeakerId)
+  // Several people can be on the other end: one name per voice heard ("Computer", "Computer 2"...).
+  const callIds = callSpeakerIds(sorted, me.id)
+  const hasCallSide = viaAgent || callIds.length > 0
 
   /** Renames a speaker for the whole call: past lines, new lines, the saved transcript and summary. */
   const rename = async (speakerId: string, name: string) => {
@@ -339,7 +341,14 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
           {other ? (
             <span className="person theirs">{other.name}</span>
           ) : hasCallSide ? (
-            <EditableName className="person theirs" name={callSideName} onSave={(n) => rename(callSpeakerId, n)} />
+            (callIds.length > 0 ? callIds : [callSpeakerId]).map((id) => (
+              <EditableName
+                key={id}
+                className="person theirs"
+                name={id === callSpeakerId && callIds.length === 0 ? callSideName : callSpeakerName(id, sorted, speakerNames)}
+                onSave={(n) => rename(id, n)}
+              />
+            ))
           ) : (
             <span className="person theirs waiting">Waiting for the other person…</span>
           )}
@@ -480,13 +489,13 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
               </p>
             ) : agentOnline ? (
               <p className="muted small">
-                The VoiceBridge Agent captures your mic (your side) and your computer's audio (the other person),
+                The VoiceBridge Self-Hosted Agent captures your mic (your side) and your computer's audio (the other person),
                 from any call app. Nothing is shared. Use a headset so their voice is not picked up by your mic too.
               </p>
             ) : (
               <p className="notice">
-                The VoiceBridge Agent is not running on this PC, so only your mic can be transcribed. Start{' '}
-                <strong>VoiceBridge Agent</strong> (or install it from the home page) to also transcribe the other
+                The VoiceBridge Self-Hosted Agent is not running on this PC, so only your mic can be transcribed. Start{' '}
+                <strong>VoiceBridge Self-Hosted Agent</strong> (or install it from the home page) to also transcribe the other
                 person.
               </p>
             )}

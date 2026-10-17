@@ -101,8 +101,10 @@ async def test_ollama_runs_on_cpu_with_the_schema():
 ANALYSIS = {
     "summary": "Rahul booked a flight.",
     "purpose": "Book a flight",
-    "action_items": ["Email the ticket"],
+    "action_items": [{"owner": "", "task": "Email the ticket"}],
+    "ticket_requests": [],
     "outcome": "Booked",
+    "people": ["Rahul"],
     "pii": ["09/28", "Rahul Verma"],
 }
 
@@ -144,7 +146,10 @@ async def test_empty_call_is_not_sent_to_the_model(tmp_path):
 
 
 def test_schema_asks_for_every_field():
-    assert set(ANALYSIS_SCHEMA["required"]) == set(ANALYSIS) and ANALYSIS_SCHEMA["additionalProperties"] is False
+    from app.analysis import NEXT_STEPS_SCHEMA
+
+    assert set(ANALYSIS_SCHEMA["required"]) | set(NEXT_STEPS_SCHEMA["required"]) == set(ANALYSIS)
+    assert ANALYSIS_SCHEMA["additionalProperties"] is False and NEXT_STEPS_SCHEMA["additionalProperties"] is False
 
 
 async def test_call_end_triggers_analysis_and_live_text_is_masked(settings):
@@ -270,12 +275,12 @@ async def test_summary_text_is_masked_too(tmp_path):
     leaky = dict(
         ANALYSIS,
         summary="Rahul Verma paid with card 1234 5678 9012 3456, expiry 09/28.",
-        action_items=["Email the ticket to rahul@x.com"],
+        action_items=[{"owner": "Aklavya", "task": "Email the ticket to rahul@x.com"}],
     )
     await analyse_session(store, code, LlmChain([FakeLLM("ollama", result=leaky)]))
     summary = store.get(code).summary
     assert summary["summary"] == "Rahul Verma paid with card xxxxx, expiry xxxxx."
-    assert summary["action_items"] == ["Email the ticket to xxxxx"]
+    assert summary["action_items"] == ["Aklavya: Email the ticket to xxxxx."]
 
 
 async def test_ollama_model_and_context_can_be_overridden():
@@ -348,7 +353,7 @@ async def test_no_sentiment_when_the_customer_never_spoke(tmp_path):
     store.add_utterance(code, Utterance("0", "u1", "Aklavya", "Testing the mic, one two.", 0.0, 0.5))
     llm = FakeLLM("ollama", result=ANALYSIS)
     await analyse_session(store, code, LlmChain([llm]))
-    assert llm.calls == 1 and llm.sentiment_input is None  # nobody to judge: no sentiment request
+    assert llm.calls == 2 and llm.sentiment_input is None  # summary and next steps; nobody to judge: no sentiment
     assert store.get(code).summary["sentiment"] is None
 
 
@@ -361,11 +366,29 @@ async def test_a_failed_sentiment_keeps_the_summary(tmp_path):
 
 def test_next_steps_cover_promises_from_either_person():
     """Seen live: 'I'll email the details' and 'follow-up by next Wednesday' gave no next steps."""
-    from app.analysis import SYSTEM_PROMPT
+    from app.analysis import NEXT_STEPS_PROMPT, NEXT_STEPS_SCHEMA
 
-    description = ANALYSIS_SCHEMA["properties"]["action_items"]["description"]
-    assert "either person" in description and "follow-up" in description
-    assert "either person" in SYSTEM_PROMPT
+    items = NEXT_STEPS_SCHEMA["properties"]["action_items"]
+    assert "someone on the call" in items["description"] and "follow-up" in items["description"]
+    assert "Keep every commitment" in items["description"] and "One item per task" in items["description"]
+    assert "never guess" in items["items"]["properties"]["owner"]["description"]
+    assert "either person" in NEXT_STEPS_PROMPT
+
+
+async def test_next_steps_are_asked_on_their_own_and_a_failure_keeps_the_summary(tmp_path):
+    """Asked within the summary, qwen2.5:7b dropped one of two tasks given to one person in 3 of 5 runs."""
+    from app.analysis import NEXT_STEPS_SCHEMA
+
+    class StepsFail(FakeLLM):
+        async def json(self, system, user, schema):
+            if schema is NEXT_STEPS_SCHEMA:
+                raise RuntimeError("next steps down")
+            return await super().json(system, user, schema)
+
+    store, code = seeded_store(tmp_path)
+    await analyse_session(store, code, LlmChain([StepsFail("ollama", result=dict(ANALYSIS, pii=[]))]))
+    summary = store.get(code).summary
+    assert summary["status"] == "ready" and summary["summary"] == "Rahul booked a flight." and summary["action_items"] == []
 
 
 def created_ticket(key="SCRUM-7", title="Invoice download crashes on Android after update", status="created"):
@@ -388,29 +411,85 @@ async def test_created_ticket_is_done_not_a_next_step(tmp_path):
     store, code = seeded_store(tmp_path)
     store.set_tickets(code, [created_ticket(), created_ticket("x", "Dismissed one", status="dismissed")])
     result = dict(ANALYSIS, outcome="No clear outcome", pii=[], action_items=[
-        "Aklavya will raise a Jira ticket for the invoice download crash on Android.",
-        "Create a ticket for the crash",
-        "Email the ticket",  # a travel ticket, not a request to raise one
-        "Call the customer back on Friday",
-    ])
+        {"owner": "Balram", "task": "Fix the invoice download crash by Friday"},
+        {"owner": "", "task": "Call the customer back on Friday"},
+    ], ticket_requests=["Create a Jira ticket for the invoice download crash on Android"])
     llm = RecordingLLM("ollama", result=result)
     await analyse_session(store, code, LlmChain([llm]))
 
-    assert llm.summary_input.endswith(
-        "Done during the call (already completed, not next steps):\n"
-        '- Jira ticket SCRUM-7 created: "Invoice download crashes on Android after update"'
-    )
-    assert "Dismissed one" not in llm.summary_input
     summary = store.get(code).summary
-    assert summary["action_items"] == ["Email the ticket", "Call the customer back on Friday"]
+    assert summary["action_items"] == ["Balram: Fix the invoice download crash by Friday.", "Call the customer back on Friday."]
     assert summary["outcome"] == "Jira ticket SCRUM-7 created"
 
 
-async def test_without_a_created_ticket_ticket_steps_stay(tmp_path):
+async def test_the_model_is_not_told_the_ticket_titles(tmp_path):
+    """Seen live: told 'Add pagination to orders API' was created, qwen2.5 dropped 'Balram implements the pagination'."""
+    store, code = seeded_store(tmp_path)
+    store.set_tickets(code, [created_ticket()])
+    llm = RecordingLLM("ollama", result=dict(ANALYSIS, pii=[]))
+    await analyse_session(store, code, LlmChain([llm]))
+    assert "Invoice download crashes" not in llm.summary_input and "SCRUM-7" not in llm.summary_input
+
+
+async def test_without_a_created_ticket_the_request_is_a_next_step(tmp_path):
     store, code = seeded_store(tmp_path)
     store.set_tickets(code, [created_ticket(status="failed")])
-    llm = RecordingLLM("ollama", result=dict(ANALYSIS, pii=[], action_items=["Raise a Jira ticket for the crash"]))
+    llm = RecordingLLM("ollama", result=dict(ANALYSIS, pii=[], ticket_requests=["Raise a Jira ticket for the crash"]))
     await analyse_session(store, code, LlmChain([llm]))
-    assert "Done during the call" not in llm.summary_input
-    assert store.get(code).summary["action_items"] == ["Raise a Jira ticket for the crash"]
+    assert store.get(code).summary["action_items"] == ["Email the ticket.", "Raise a Jira ticket for the crash."]
     assert store.get(code).summary["outcome"] == "Booked"
+
+
+def test_next_steps_read_one_sentence_per_line():
+    from app.analysis import sentence_lines
+
+    class S:
+        transcript = [
+            Utterance("a", "u1", "Aklavya", "Create a Jira ticket for it. Sara, write the design by Tuesday? Balram,  "
+                      "you implement it!", 1, 2),
+            Utterance("b", "u1-call", "Sara", "Sure.", 3, 4),
+        ]
+
+    assert sentence_lines(S()) == (
+        "Aklavya: Create a Jira ticket for it.\nAklavya: Sara, write the design by Tuesday?\n"
+        "Aklavya: Balram,  you implement it!\nSara: Sure."
+    )
+
+
+def test_one_line_per_person_with_their_tasks_in_order():
+    from app.analysis import tasks_by_person
+
+    items = [
+        {"owner": "Balram", "task": "fix the coupon bug by Wednesday evening."},
+        {"owner": "Priya", "task": "Retest both bugs on Thursday"},
+        {"owner": "balram", "task": "Implement the pagination on Thursday"},
+        {"owner": "", "task": "Follow-up next week"},
+        {"owner": "", "task": "Send the deck"},
+        {"owner": "Priya", "task": "none"},
+        "Plain text task",
+    ]
+    assert tasks_by_person(items) == [
+        "Balram: Fix the coupon bug by Wednesday evening. Implement the pagination on Thursday.",
+        "Priya: Retest both bugs on Thursday.",
+        "Follow-up next week.",
+        "Send the deck.",
+        "Plain text task.",
+    ]
+
+
+def test_voice_labels_are_not_people():
+    from app.analysis import people_on_call
+
+    class S:
+        transcript = [Utterance("a", "u1", "Aklavya", "hi", 1, 2), Utterance("b", "u1-call2", "Computer 2", "yo", 3, 4)]
+
+    assert people_on_call(S(), ["Computer 3", "Speaker 1", "Vikram", "aklavya"]) == ["Aklavya", "Vikram"]
+
+
+def test_a_next_step_that_only_mentions_the_ticket_stays():
+    from app.analysis import _TICKET_ITEM
+
+    assert _TICKET_ITEM.search("Aklavya to create a Jira ticket for the export timeout")
+    assert _TICKET_ITEM.search("Raise a ticket for the login bug")
+    assert not _TICKET_ITEM.search("Aklavya will add Ramesh's findings to the JIRA ticket")
+    assert not _TICKET_ITEM.search("Ramesh to profile the export query")

@@ -44,8 +44,10 @@ from app.analysis import analyse_session, mask_text
 from app.auth import AuthError, verify_token
 from app.config import Settings
 from app.llm import LlmChain
+from app.naming import decide, name_votes
 from app.nba.service import NbaService
 from app.pipeline import DeepgramParticipantStream, ParticipantStream
+from app.recap import RecapService
 from app.room import RoomRecorder, recheck
 from app.segmenter import Segmenter
 from app.sessions import (
@@ -54,6 +56,8 @@ from app.sessions import (
     SessionStore,
     Utterance,
     call_speaker_id,
+    call_speaker_name,
+    is_call_speaker,
     normalize_code,
     room_speaker_id,
     room_speaker_name,
@@ -102,8 +106,10 @@ class SocketHandlers:
         llm: LlmChain,
         nba: NbaService | None = None,
         tickets: TicketService | None = None,
+        recap: RecapService | None = None,
     ):
         self._sio = sio
+        self._recap = recap
         self._nba = nba
         self._tickets = tickets
         self._llm = llm
@@ -122,6 +128,10 @@ class SocketHandlers:
         self._closing: set[asyncio.Task] = set()  # streams being flushed in the background
         self._room_audio = RoomRecorder(settings.sample_rate)  # in-room meetings' audio until re-checked
         self._room_user: dict[str, str] = {}  # in-room session code -> user whose mic records it
+        # Call audio with its voices told apart: kept until the call stops, then heard again as a whole (app.room).
+        self._call_audio = RoomRecorder(settings.sample_rate)
+        self._call_user: dict[str, str] = {}  # session code -> user whose call audio it is
+        self._named_by_hand: dict[str, set[str]] = {}  # session code -> voices renamed in the call (never auto-named)
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
                   "agent_start", "agent_stop", "agent_ping", "rename_speaker", "mute_mic", "set_mode",
                   "ticket_create", "ticket_dismiss")
@@ -287,6 +297,9 @@ class SocketHandlers:
             return
         mic, call = split_stereo(bytes(audio))
         ts = self._chunk_ts(key, len(mic))  # one clock for both channels: they were captured together
+        if self._settings.call_diarize:
+            self._call_audio.add(code, call, ts)
+            self._call_user[code] = user["id"]
         if key in self._muted:  # my mic is muted: only the other person is transcribed
             await self._stream_for(code, self._call_speaker(code, user)).push(call, ts)
             return
@@ -328,6 +341,14 @@ class SocketHandlers:
             self._store.rename_speaker(code, speaker_id, (data or {}).get("name"))
         except SessionError as exc:
             return {"ok": False, "error": str(exc)}
+        self._named_by_hand.setdefault(code, set()).add(speaker_id)  # a typed name is never replaced
+        await self._show_rename(code, speaker_id)
+        recap = self._store.get(code).recap
+        if self._recap is not None and recap and recap.get("ts"):
+            await self._recap.send(code)  # the posted recap shows the new name too
+        return {"ok": True}
+
+    async def _show_rename(self, code: str, speaker_id: str) -> None:
         name = self._store.speaker_name(code, speaker_id, "")
         live = self._stream_speakers.get((code, speaker_id))
         if live is not None:
@@ -336,7 +357,41 @@ class SocketHandlers:
             "speaker_renamed", {"code": code, "speaker_id": speaker_id, "name": name}, room=room_for(code)
         )
         await self._broadcast_participants(code)
-        return {"ok": True}
+
+    async def _auto_name(self, code: str) -> None:
+        """Name the call audio's voices from what is said ("Priya, can you..." then that voice answers)."""
+        session = self._store.get(code)
+        if session.mode != "call":
+            return
+        voices = {u.speaker_id for u in session.transcript if is_call_speaker(u.speaker_id)}
+        by_hand = self._named_by_hand.get(code, set())
+        name_of = {sid: self._store.speaker_name(code, sid, call_speaker_name(sid)) for sid in voices}
+        unnamed = {sid for sid in voices if sid not in by_hand and name_of[sid] == call_speaker_name(sid)}
+        if not unnamed:
+            return
+        taken = set(session.participants.values()) | {name_of[sid] for sid in voices - unnamed}
+        for speaker_id, name in decide(name_votes(session.transcript, is_call_speaker), unnamed, taken).items():
+            self._store.rename_speaker(code, speaker_id, name)
+            await self._show_rename(code, speaker_id)
+            logger.info("Named voice %s of session %s: %s", speaker_id, code, name)
+
+    async def _recheck_call(self, code: str) -> None:
+        """After a call with its voices told apart: hear the call audio again as a whole (better labels than live),
+        rebuild only its lines (my mic's stay), keep the names and name any new voice."""
+        pieces = self._call_audio.take(code)
+        user_id = self._call_user.pop(code, None)
+        if not pieces or user_id is None:
+            return
+        s = self._settings
+        changed = await recheck(
+            self._store, code, user_id, pieces, self._stt, s.sample_rate, s.end_silence_ms / 1000, s.pii_masking,
+            speaker_id=call_speaker_id, default_name=call_speaker_name,
+            only=lambda u: is_call_speaker(u.speaker_id) and u.speaker_id.rsplit("-call", 1)[0] == user_id,
+        )
+        if changed:
+            await self._auto_name(code)
+            transcript = [u.to_dict() for u in self._store.get(code).transcript]
+            await self._sio.emit("transcript_reset", {"code": code, "transcript": transcript}, room=room_for(code))
 
     def _room_speakers(self, code: str, user_id: str):
         """In-room mode: Deepgram's voice number -> the speaker it is recorded as (its dict is renamed in place)."""
@@ -351,8 +406,28 @@ class SocketHandlers:
 
         return speaker_for
 
+    def _call_speakers(self, code: str, user_id: str):
+        """The call audio: Deepgram's voice number -> the speaker it is recorded as ("Computer", "Computer 2"...)."""
+
+        def speaker_for(label: int) -> dict:
+            speaker_id = call_speaker_id(user_id, label + 1)
+            speaker = self._stream_speakers.get((code, speaker_id))
+            if speaker is None:
+                name = self._store.speaker_name(code, speaker_id, call_speaker_name(speaker_id))
+                speaker = self._stream_speakers[(code, speaker_id)] = {"id": speaker_id, "name": name}
+            return speaker
+
+        return speaker_for
+
     def _stream_for(self, code: str, speaker: dict) -> LiveStream:
-        return self._streams.get((code, speaker["id"])) or self._new_stream(code, speaker)
+        stream = self._streams.get((code, speaker["id"]))
+        if stream is not None:
+            return stream
+        if self._settings.call_diarize and is_call_speaker(speaker["id"]):
+            # Several people can be on the other end: each voice gets its own bubbles ("Computer", "Computer 2"...),
+            # named from what is said on the call (app.naming) and heard again as a whole when the call stops.
+            return self._new_stream(code, speaker, self._call_speakers(code, speaker["id"].rsplit("-call", 1)[0]))
+        return self._new_stream(code, speaker)
 
     async def set_mode(self, sid: str, data: dict) -> dict:
         """Pick how the next recording tells speakers apart: call (by channel) or room (one mic, by voice)."""
@@ -421,6 +496,11 @@ class SocketHandlers:
                     await self._tickets.on_final(code, utterance)
                 except Exception:  # a ticket problem must never stop transcription
                     logger.exception("Ticket drafting failed for session %s", code)
+            if self._settings.call_diarize:
+                try:
+                    await self._auto_name(code)
+                except Exception:  # a naming problem must never stop transcription
+                    logger.exception("Naming voices failed for session %s", code)
 
         async def notify(payload: dict) -> None:
             await self._sio.emit("stt_status", payload, room=room_for(code))
@@ -487,7 +567,7 @@ class SocketHandlers:
         self._clocks.pop((code, user_id), None)
         mine = (user_id, call_speaker_id(user_id))
         for key in [k for k in self._stream_speakers if k[0] == code]:
-            if key[1] in mine or key[1].startswith(f"{user_id}-room"):
+            if key[1] in mine or key[1].startswith((f"{user_id}-room", f"{user_id}-call")):
                 del self._stream_speakers[key]
         streams = [self._streams.pop((code, sid), None) for sid in (user_id, call_speaker_id(user_id))]
         await asyncio.gather(*(stream.close() for stream in streams if stream is not None))
@@ -511,6 +591,8 @@ class SocketHandlers:
             if not self._settings.call_analysis:
                 return
             await analyse_session(self._store, code, self._llm)
+            if self._recap is not None:
+                await self._recap.send(code)
             if self._nba is not None:
                 self._nba.warm()  # the summary replaced the cached hint prompt in a local model
 
@@ -520,6 +602,9 @@ class SocketHandlers:
 
     async def _recheck_room(self, code: str) -> None:
         session = self._store.get(code)
+        if session.mode == "call":
+            await self._recheck_call(code)
+            return
         if session.mode != "room":
             return
         user_id = self._room_user.pop(code, session.created_by)

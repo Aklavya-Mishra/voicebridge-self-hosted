@@ -24,7 +24,7 @@ class Settings:
     sample_rate: int = 16000
     vad_provider: str = "energy"  # energy | silero (torch package) | sherpa (Silero model through sherpa-onnx, no torch)
     vad_energy_threshold_dbfs: float = -45.0
-    end_silence_ms: int = 3000  # silence that ends a chat bubble (Deepgram and local)
+    end_silence_ms: int = 2000  # silence that ends a chat bubble (Deepgram and local)
     max_utterance_ms: int = 15000
     min_speech_ms: int = 250
     preroll_ms: int = 200
@@ -41,6 +41,8 @@ class Settings:
     deepgram_url: str = "wss://api.deepgram.com/v1/listen"
     deepgram_endpointing_ms: int = 300  # silence that ends a sentence
     deepgram_connect_timeout_s: float = 3.0
+    # Tell the voices in the call audio apart (several people on the other end): Deepgram diarization.
+    call_diarize: bool = True
     gemini_api_key: str | None = None
     # End-of-call analysis (summary + PII). Provider order: Gemini (GEMINI_API_KEY), Anthropic
     # (ANTHROPIC_API_KEY), then the local model through Ollama, which needs no key.
@@ -84,6 +86,12 @@ class Settings:
     # In-room live: voice-print similarity (0-1) at or above which a line joins a known voice; 0.4-0.6 all labelled the
     # tools/make_test_audio.py meeting right (same person >= 0.74, two people <= 0.23 with ERes2Net).
     sherpa_speaker_threshold: float = 0.5
+    # Create each drafted ticket straight away instead of waiting for the advisor's click.
+    jira_auto_create: bool = False
+    # Slack recap of each call's summary (app.recap): on only when the user token and channel are set.
+    slack_user_token: str | None = None  # xoxp-...: recaps are posted as this person
+    slack_bot_token: str | None = None  # xoxb-...: only to look people up for @mentions
+    slack_recap_channel: str | None = None  # e.g. voicebridge-recaps
     whisper_model: str = "base"  # tiny | base | small | medium | large-v3 (bigger = more accurate, slower)
     whisper_device: str = "cpu"  # cpu | cuda
     whisper_compute_type: str = "int8"  # int8 on CPU; float16 on GPU
@@ -93,6 +101,10 @@ class Settings:
 
     max_import_bytes: int = 100 * 1024 * 1024
     max_chunk_bytes: int = 64000
+
+    @property
+    def slack_recap_enabled(self) -> bool:
+        return bool(self.slack_user_token and self.slack_recap_channel)
 
     @property
     def tickets_enabled(self) -> bool:
@@ -127,6 +139,7 @@ class Settings:
             deepgram_url=env("DEEPGRAM_URL", cls.deepgram_url),
             deepgram_endpointing_ms=int(env("DEEPGRAM_ENDPOINTING_MS", cls.deepgram_endpointing_ms)),
             deepgram_connect_timeout_s=float(env("DEEPGRAM_CONNECT_TIMEOUT_S", cls.deepgram_connect_timeout_s)),
+            call_diarize=_bool(env("CALL_DIARIZE", "true")),
             gemini_api_key=env("GEMINI_API_KEY") or None,
             call_analysis=_bool(env("CALL_ANALYSIS", "true")),
             pii_masking=_bool(env("PII_MASKING", "true")),
@@ -158,6 +171,10 @@ class Settings:
             sherpa_segmentation_model=env("SHERPA_SEGMENTATION_MODEL", cls.sherpa_segmentation_model),
             sherpa_embedding_model=env("SHERPA_EMBEDDING_MODEL", cls.sherpa_embedding_model),
             sherpa_speaker_threshold=float(env("SHERPA_SPEAKER_THRESHOLD", cls.sherpa_speaker_threshold)),
+            jira_auto_create=_bool(env("JIRA_AUTO_CREATE", "false")),
+            slack_user_token=env("SLACK_USER_TOKEN") or None,
+            slack_bot_token=env("SLACK_BOT_TOKEN") or None,
+            slack_recap_channel=(env("SLACK_RECAP_CHANNEL") or "").strip().lstrip("#") or None,
             whisper_model=env("WHISPER_MODEL", cls.whisper_model),
             whisper_device=env("WHISPER_DEVICE", cls.whisper_device),
             whisper_compute_type=env("WHISPER_COMPUTE_TYPE", cls.whisper_compute_type),

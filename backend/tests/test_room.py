@@ -185,3 +185,142 @@ async def test_a_meeting_gets_minutes_with_attendees_and_no_sentiment():
     assert summary["done"] == ["Jira ticket SCRUM-9 created: Analytics handover"]
     assert summary["open_issues"] == ["Rohan feels his work deserved more."]
     assert "sentiment" not in summary
+
+
+def test_call_voices_are_computer_then_computer_n_and_can_be_renamed_before_a_saved_line():
+    from app.sessions import call_speaker_id, call_speaker_name, is_call_speaker
+
+    assert call_speaker_id("u1") == "u1-call" and call_speaker_id("u1", 3) == "u1-call3"
+    assert call_speaker_name("u1-call") == "Computer" and call_speaker_name("u1-call2") == "Computer 2"
+    assert is_call_speaker("u1-call") and is_call_speaker("u1-call4") and not is_call_speaker("u1-room2")
+    store = SessionStore()
+    code = store.create({"id": "u1", "name": "Aklavya"}).code
+    assert store.rename_speaker(code, "u1-call2", "Balram") == "Computer 2"
+    assert store.speaker_name(code, "u1-call2", "?") == "Balram"
+
+
+def _handlers(settings=None):
+    from app.config import Settings
+    from app.socket_events import SocketHandlers
+
+    class Sio:
+        def __init__(self):
+            self.emitted = []
+
+        def on(self, name, handler):
+            pass
+
+        async def emit(self, event, payload, room=None, to=None):
+            self.emitted.append((event, payload))
+
+    store = SessionStore()
+    code = store.create({"id": "u1", "name": "Aklavya"}).code
+    sio = Sio()
+    return SocketHandlers(sio, store, settings or Settings(jwt_secret="t"), stt=None, llm=None), store, code, sio
+
+
+def test_call_audio_tells_voices_apart_unless_turned_off():
+    from app.config import Settings
+
+    handlers, _, code, _ = _handlers()
+    made = []
+    handlers._new_stream = lambda c, speaker, speaker_for=None: made.append((speaker["id"], speaker_for)) or "s"
+    handlers._stream_for(code, {"id": "u1-call", "name": "Computer"})
+    handlers._stream_for(code, {"id": "u1", "name": "Aklavya"})
+    (call_id, voices), (mic_id, none) = made
+    assert call_id == "u1-call" and mic_id == "u1" and none is None
+    assert voices(0) == {"id": "u1-call", "name": "Computer"}
+    assert voices(1) == {"id": "u1-call2", "name": "Computer 2"}
+    off, _, code, _ = _handlers(Settings(jwt_secret="t", call_diarize=False))
+    made.clear()
+    off._new_stream = lambda c, speaker, speaker_for=None: made.append(speaker_for) or "s"
+    off._stream_for(code, {"id": "u1-call", "name": "Computer"})
+    assert made == [None]
+
+
+def say(store, code, speaker, name, text, start):
+    store.add_utterance(code, Utterance(f"{speaker}{start}", speaker, name, text, start, start + 3))
+
+
+async def test_voices_are_named_live_and_a_name_typed_by_hand_is_kept():
+    handlers, store, code, sio = _handlers()
+    say(store, code, "u1", "Aklavya", "Priya, can you retest the login page?", 0)
+    say(store, code, "u1-call2", "Computer 2", "Sure, I'll retest it today.", 4)
+    await handlers._auto_name(code)
+    assert store.speaker_name(code, "u1-call2", "?") == "Priya"
+    assert [u.speaker_name for u in store.get(code).transcript] == ["Aklavya", "Priya"]
+    assert ("speaker_renamed", {"code": code, "speaker_id": "u1-call2", "name": "Priya"}) in sio.emitted
+    # A voice renamed by hand is never named again by the clues.
+    say(store, code, "u1-call", "Computer", "And the payments bug?", 8)
+    store.rename_speaker(code, "u1-call", "Rohan")
+    handlers._named_by_hand.setdefault(code, set()).add("u1-call")
+    say(store, code, "u1", "Aklavya", "Thanks Vikram.", 12)
+    await handlers._auto_name(code)
+    assert store.speaker_name(code, "u1-call", "?") == "Rohan"
+
+
+def test_only_the_call_audio_lines_are_swapped():
+    store = SessionStore()
+    code = store.create({"id": "u1", "name": "Aklavya"}).code
+    say(store, code, "u1", "Aklavya", "mine", 1)
+    say(store, code, "u1-call", "Computer", "old", 2)
+    new = Utterance("n1", "u1-call2", "Computer 2", "new", 2.5, 3)
+    store.replace_utterances(code, 0, 10, [new], only=lambda u: u.speaker_id.startswith("u1-call"))
+    assert [u.text for u in store.get(code).transcript] == ["mine", "new"]
+
+
+async def test_call_recheck_rebuilds_only_the_call_voices_and_keeps_names():
+    from app.room import Piece, recheck
+    from app.sessions import call_speaker_id, call_speaker_name
+
+    store = SessionStore()
+    code = store.create({"id": "u1", "name": "Aklavya"}).code
+    say(store, code, "u1", "Aklavya", "Priya, status?", 100.0)
+    say(store, code, "u1-call", "Computer", "done and vikram here", 104.0)
+    store.rename_speaker(code, "u1-call", "Priya")
+
+    class Stt:
+        async def diarize(self, pcm, rate):
+            return [
+                {"start": 4.0, "end": 4.4, "word": "done", "speaker": 0},
+                {"start": 4.5, "end": 4.9, "word": "and", "speaker": 0},
+                {"start": 6.0, "end": 6.4, "word": "vikram", "speaker": 1},
+                {"start": 6.5, "end": 6.9, "word": "here", "speaker": 1},
+            ]
+
+    changed = await recheck(
+        store, code, "u1", [Piece(100.0, bytearray(16000 * 2 * 10))], Stt(), 16000, 1.0, False,
+        speaker_id=call_speaker_id, default_name=call_speaker_name,
+        only=lambda u: u.speaker_id.startswith("u1-call"),
+    )
+    assert changed
+    lines = [(u.speaker_id, u.speaker_name, u.text) for u in store.get(code).transcript]
+    assert lines == [("u1", "Aklavya", "Priya, status?"), ("u1-call", "Priya", "done and"),
+                     ("u1-call2", "Computer 2", "vikram here")]
+
+
+def test_long_silences_are_cut_before_the_recheck_and_times_stay_right():
+    import numpy as np
+
+    from app.room import Piece, _at, drop_silence
+
+    rate = 16000
+    tone = (np.ones(rate // 2) * 3000).astype(np.int16)  # 0.5 s heard
+    pcm = np.concatenate([np.zeros(rate * 2, np.int16), tone, np.zeros(rate * 3, np.int16), tone]).tobytes()
+    parts = drop_silence([Piece(100.0, bytearray(pcm))], rate)
+    assert len(parts) == 2
+    assert abs(parts[0].start_ts - (102.0 - 0.15)) < 1e-3 and abs(parts[1].start_ts - (105.5 - 0.15)) < 1e-3
+    # 0.8 s into the cut audio is 0.15 s into the second heard part
+    assert abs(_at(parts, rate, 0.8 + 0.15) - (105.5)) < 0.01
+    assert drop_silence([Piece(0.0, bytearray(np.zeros(rate, np.int16).tobytes()))], rate) == []
+
+
+def test_a_word_starting_just_before_its_piece_stays_in_it():
+    from app.room import Piece, _word_times
+
+    rate = 16000
+    pieces = [Piece(100.0, bytearray(rate * 2 * 2)), Piece(150.0, bytearray(rate * 2 * 2))]  # 2 s each
+    # "Yes" starts 0.05 s before the second piece (in the cut audio) but is mostly in it
+    times = _word_times(pieces, rate, 1.95, 2.3)
+    assert abs(times["ts"] - 150.0) < 1e-6 and abs(times["end_ts"] - 150.3) < 1e-6
+    assert abs(_word_times(pieces, rate, 0.5, 0.8)["ts"] - 100.5) < 1e-6

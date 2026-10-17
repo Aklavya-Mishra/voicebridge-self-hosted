@@ -12,6 +12,8 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from app.analysis import mask_text
 from app.sessions import SessionStore, Utterance, room_speaker_id, room_speaker_name
 from app.stt import clean_transcript
@@ -62,6 +64,45 @@ def _at(pieces: list[Piece], rate: int, t: float) -> float:
     return t
 
 
+QUIET = 200  # sample level (PCM16) under which audio counts as silence
+MAX_PAUSE_S = 0.6  # longer silences are cut before the re-check
+KEEP_S = 0.15  # silence kept on each side of what is heard
+
+
+def drop_silence(pieces: list[Piece], rate: int) -> list[Piece]:
+    """The pieces with long silences cut out, each heard part a piece of its own (times stay right through `_at`).
+    Long runs of digital silence, as in call audio while only I speak, made Deepgram hear one voice for four."""
+    out: list[Piece] = []
+    pad, pause = int(KEEP_S * rate), int(MAX_PAUSE_S * rate)
+    for piece in pieces:
+        samples = np.frombuffer(bytes(piece.pcm), dtype=np.int16)
+        loud = np.flatnonzero(np.abs(samples.astype(np.int32)) > QUIET)
+        if not len(loud):
+            continue
+        # heard parts: runs of loud samples whose gaps are shorter than `pause`
+        breaks = np.flatnonzero(np.diff(loud) > pause)
+        starts = np.concatenate(([loud[0]], loud[breaks + 1]))
+        ends = np.concatenate((loud[breaks], [loud[-1]]))
+        for a, b in zip(starts, ends):
+            a, b = max(0, int(a) - pad), min(len(samples), int(b) + pad + 1)
+            out.append(Piece(piece.start_ts + a / rate, bytearray(samples[a:b].tobytes())))
+    return out
+
+
+def _word_times(pieces: list[Piece], rate: int, start: float, end: float) -> dict:
+    """Server times of a word: its piece is the one its middle falls in. A word's start can come a little before the
+    piece it belongs to (cut audio), and on its own would land at the end of the piece before."""
+    offset = 0.0
+    for piece in pieces:
+        length = len(piece.pcm) / 2 / rate
+        if (start + end) / 2 < offset + length or piece is pieces[-1]:
+            a = min(max(start - offset, 0.0), length)
+            b = min(max(end - offset, a), length)
+            return {"ts": piece.start_ts + a, "end_ts": piece.start_ts + b}
+        offset += length
+    return {"ts": start, "end_ts": end}
+
+
 def speakers_by_label(words: list[dict], live: list[Utterance]) -> dict[int, str]:
     """Deepgram's voice numbers -> live speaker ids, by how many of each voice's words fall in that speaker's live
     lines. Most shared words first, one speaker per voice; a voice no live line explains gets none."""
@@ -104,12 +145,15 @@ def build_lines(words: list[dict], speaker_of: dict[int, dict], gap_s: float, ma
 
 
 async def recheck(
-    store: SessionStore, code: str, user_id: str, pieces: list[Piece], stt, sample_rate: int, gap_s: float, masking: bool
+    store: SessionStore, code: str, user_id: str, pieces: list[Piece], stt, sample_rate: int, gap_s: float, masking: bool,
+    speaker_id=room_speaker_id, default_name=room_speaker_name, only=None,
 ) -> bool:
-    """Rebuild the transcript of the recorded span from Deepgram's labels over the whole audio. Returns whether the
-    transcript changed; on any failure the live transcript stays."""
+    """Rebuild the transcript of the recorded span from the labels over the whole audio. Returns whether the
+    transcript changed; on any failure the live transcript stays. For the call audio of a call, `speaker_id` and
+    `default_name` give its voices ("Computer", "Computer 2"...) and `only` picks its lines (my mic's stay)."""
     if not pieces or not hasattr(stt, "diarize"):
         return False
+    pieces = drop_silence(pieces, sample_rate) or pieces  # all quiet: nothing to cut
     pcm = b"".join(bytes(p.pcm) for p in pieces)
     try:
         raw = await stt.diarize(pcm, sample_rate)
@@ -118,25 +162,23 @@ async def recheck(
         return False
     if not raw:
         return False  # nothing heard: keep whatever was shown live
-    words = [
-        {**w, "ts": _at(pieces, sample_rate, w["start"]), "end_ts": _at(pieces, sample_rate, w["end"])} for w in raw
-    ]
+    words = [{**w, **_word_times(pieces, sample_rate, w["start"], w["end"])} for w in raw]
     start = pieces[0].start_ts
     end = pieces[-1].start_ts + len(pieces[-1].pcm) / 2 / sample_rate
     session = store.get(code)
-    live = [u for u in session.transcript if start - 1 <= u.start_ts <= end + 1]
+    live = [u for u in session.transcript if start - 1 <= u.start_ts <= end + 1 and (only is None or only(u))]
     mapping = speakers_by_label(words, live)
     used = {u.speaker_id for u in session.transcript} | set(mapping.values())
     number = 1
     for label in sorted({w["speaker"] for w in words} - set(mapping)):
-        while room_speaker_id(user_id, number) in used:
+        while speaker_id(user_id, number) in used:
             number += 1
-        mapping[label] = room_speaker_id(user_id, number)
+        mapping[label] = speaker_id(user_id, number)
         used.add(mapping[label])
     speaker_of = {
-        label: {"id": sid, "name": store.speaker_name(code, sid, room_speaker_name(sid))} for label, sid in mapping.items()
+        label: {"id": sid, "name": store.speaker_name(code, sid, default_name(sid))} for label, sid in mapping.items()
     }
     lines = build_lines(words, speaker_of, gap_s, masking)
-    store.replace_utterances(code, start - 1, end + 1, lines)
+    store.replace_utterances(code, start - 1, end + 1, lines, only=only)
     logger.info("Re-checked who spoke in meeting %s: %d live lines -> %d", code, len(live), len(lines))
     return True
