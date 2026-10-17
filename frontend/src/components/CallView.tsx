@@ -3,7 +3,7 @@ import { io, type Socket } from 'socket.io-client'
 import { API_BASE } from '../lib/api'
 import { addHint, hintsNewestFirst } from '../lib/assist'
 import { MicCapture } from '../lib/mic'
-import { hasConsented, saveConsent } from '../lib/storage'
+import { hasConsented, loadHintsPref, saveConsent, saveHintsPref } from '../lib/storage'
 import { upsertTicket } from '../lib/tickets'
 import { callSpeakerIds, callSpeakerName, roomSpeakerIds, roomSpeakerName } from '../lib/room'
 import { formatTranscript } from '../lib/transcript'
@@ -69,6 +69,8 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
   const [swapped, setSwapped] = useState(false)
   const [rechecking, setRechecking] = useState(false)
   const [nbaStatus, setNbaStatus] = useState<{ state: NbaStatusEvent['state']; reason?: string }>({ state: 'idle' })
+  // Live hints on or off for this call; this browser's last choice wins over the server default.
+  const [hintsOn, setHintsOn] = useState(() => loadHintsPref() ?? true)
   const socketRef = useRef<Socket | null>(null)
   const micRef = useRef<MicCapture | null>(null)
   // Read by the socket's connect handler: after a reconnect the agent recording (and mute) is asked for again.
@@ -116,6 +118,10 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
       setFacts(session.nba?.facts ?? {})
       setTickets(session.tickets ?? [])
       setMode(session.mode ?? 'call')
+      const serverHints: boolean = ack.hints_enabled ?? true
+      const wanted = loadHintsPref() ?? serverHints
+      setHintsOn(wanted)
+      if (wanted !== serverHints) void socket.emitWithAck('set_hints', { code, enabled: wanted })
       setStatus('joined')
       setError('') // e.g. "Cannot reach the server" from before the connection recovered
       // A dropped connection made the server stop the agent for this call: start it again.
@@ -156,6 +162,7 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
     socket.on('nba_domain', (data: NbaDomainEvent) => setDetected(data.domain))
     socket.on('nba_status', (data: NbaStatusEvent) => setNbaStatus({ state: data.state, reason: data.reason }))
     socket.on('mode_changed', (data: { mode: SessionMode }) => setMode(data.mode))
+    socket.on('hints_changed', (data: { enabled: boolean }) => setHintsOn(data.enabled))
     socket.on('transcript_reset', (data: { transcript: Session['transcript'] }) => {
       setMessages(new Map(data.transcript.map((u) => [u.id, fromUtterance(u)])))
       setRechecking(false)
@@ -224,6 +231,19 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
     setViaAgent(true)
     setMuted(false)
     setRecording(true)
+  }
+
+  /** Hints on/off for this call, remembered for the next one. Off, no hint requests run (most of the model's work);
+   * Jira, the summary and the Slack recap are unchanged. */
+  const toggleHints = async () => {
+    const next = !hintsOn
+    setHintsOn(next) // at once; undone if the server refuses
+    saveHintsPref(next)
+    const ack = await socketRef.current?.emitWithAck('set_hints', { code, enabled: next })
+    if (!ack?.ok) {
+      setHintsOn(!next)
+      setError(ack?.error ?? 'Could not change hints')
+    }
   }
 
   const setMicMuted = async (next: boolean) => {
@@ -430,7 +450,9 @@ export function CallView({ code, callName, nbaEnabled, ticketsEnabled, token, me
       <div className={(nbaEnabled && !room) || ticketsEnabled ? 'call-body' : 'call-body solo'}>
         {((nbaEnabled && !room) || ticketsEnabled) && (
           <AssistPanel
-            hintsEnabled={nbaEnabled && !room}
+            hintsAvailable={nbaEnabled && !room}
+            hintsOn={hintsOn}
+            onToggleHints={() => void toggleHints()}
             detected={detected}
             hints={hints}
             facts={facts}

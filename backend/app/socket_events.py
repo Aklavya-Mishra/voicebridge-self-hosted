@@ -18,6 +18,9 @@ one per user):
   The agent streams stereo audio_chunk (mic + speaker loopback) only into sessions it was started for.
 web -> server: set_mode {code, mode: call|room} -> ack {ok, error?} before recording; server -> room:
   mode_changed {code, mode}.
+web -> server: set_hints {code, enabled} -> ack {ok, error?}: live hints on or off for this call (default
+  NBA_DEFAULT_ON); off, no hint requests run; Jira, the summary and the Slack recap are unchanged. server -> room:
+  hints_changed {code, enabled}. join_session's ack carries hints_enabled.
 In-room sessions (mode "room"): one mic hears everyone. Only the mic is used (mono, or the left channel of the agent's
   stereo); Deepgram, or sherpa's voice prints, tell the voices apart and lines go to "<user id>-room<n>" ("Speaker n"
   until renamed). When the mic stops, the meeting audio is checked again as a whole and the transcript of that span
@@ -44,7 +47,7 @@ from app.analysis import analyse_session, mask_text
 from app.auth import AuthError, verify_token
 from app.config import Settings
 from app.llm import LlmChain
-from app.naming import decide, name_votes
+from app.naming import name_voices
 from app.nba.service import NbaService
 from app.pipeline import DeepgramParticipantStream, ParticipantStream
 from app.recap import RecapService
@@ -132,9 +135,15 @@ class SocketHandlers:
         self._call_audio = RoomRecorder(settings.sample_rate)
         self._call_user: dict[str, str] = {}  # session code -> user whose call audio it is
         self._named_by_hand: dict[str, set[str]] = {}  # session code -> voices renamed in the call (never auto-named)
+        # Naming the call's voices with the model: one run at a time per call, again if new lines came meanwhile.
+        self._naming: dict[str, asyncio.Task] = {}
+        self._naming_again: set[str] = set()
+        # Session code -> live hints on or off, once a call chose (set_hints); otherwise NBA_DEFAULT_ON. Hints are
+        # 87% of the model's tokens on a test call, so a call without them needs far less GPU.
+        self._hints: dict[str, bool] = {}
         events = ("connect", "disconnect", "join_session", "audio_chunk", "stop_audio", "leave_session",
                   "agent_start", "agent_stop", "agent_ping", "rename_speaker", "mute_mic", "set_mode",
-                  "ticket_create", "ticket_dismiss")
+                  "set_hints", "ticket_create", "ticket_dismiss")
         for name in events:
             sio.on(name, getattr(self, name))
 
@@ -263,11 +272,29 @@ class SocketHandlers:
         except SessionError as exc:
             return {"ok": False, "error": str(exc)}
         state["codes"].add(session.code)
-        if self._nba is not None:
+        if self._hints_on(session.code):
             self._nba.warm()  # the caller may speak soon: have the hint prompt cached by then
         await self._sio.enter_room(sid, room_for(session.code))
         await self._broadcast_participants(session.code)
-        return {"ok": True, "session": session.to_dict()}
+        return {"ok": True, "session": session.to_dict(), "hints_enabled": self._hints_on(session.code)}
+
+    def _hints_on(self, code: str) -> bool:
+        return self._nba is not None and self._hints.get(code, self._settings.nba_default_on)
+
+    async def set_hints(self, sid: str, data: dict) -> dict:
+        """Live hints on or off for this call. Off, no hint requests run; Jira, the summary and Slack carry on."""
+        state = await self._sio.get_session(sid)
+        code = normalize_code((data or {}).get("code"))
+        if code not in state["codes"]:
+            return {"ok": False, "error": "Join the session first"}
+        if self._nba is None:
+            return {"ok": False, "error": "Live hints are turned off on the server"}
+        enabled = bool((data or {}).get("enabled"))
+        self._hints[code] = enabled
+        if enabled:
+            self._nba.warm()
+        await self._sio.emit("hints_changed", {"code": code, "enabled": enabled}, room=room_for(code))
+        return {"ok": True}
 
     async def audio_chunk(self, sid: str, data: dict) -> None:
         state = await self._sio.get_session(sid)
@@ -358,22 +385,55 @@ class SocketHandlers:
         )
         await self._broadcast_participants(code)
 
-    async def _auto_name(self, code: str) -> None:
-        """Name the call audio's voices from what is said ("Priya, can you..." then that voice answers)."""
+    def _unnamed_voices(self, code: str) -> dict[str, str]:
+        """The call audio's voices still on their default label and not renamed by hand: speaker id -> label."""
         session = self._store.get(code)
         if session.mode != "call":
-            return
-        voices = {u.speaker_id for u in session.transcript if is_call_speaker(u.speaker_id)}
+            return {}
         by_hand = self._named_by_hand.get(code, set())
-        name_of = {sid: self._store.speaker_name(code, sid, call_speaker_name(sid)) for sid in voices}
-        unnamed = {sid for sid in voices if sid not in by_hand and name_of[sid] == call_speaker_name(sid)}
-        if not unnamed:
+        voices = {u.speaker_id for u in session.transcript if is_call_speaker(u.speaker_id)}
+        return {sid: call_speaker_name(sid) for sid in voices - by_hand
+                if self._store.speaker_name(code, sid, call_speaker_name(sid)) == call_speaker_name(sid)}
+
+    async def _auto_name(self, code: str) -> None:
+        """Name the call audio's voices: the model reads the call and says who is who (app.naming)."""
+        unnamed = self._unnamed_voices(code)
+        if not unnamed or self._llm is None:
             return
-        taken = set(session.participants.values()) | {name_of[sid] for sid in voices - unnamed}
-        for speaker_id, name in decide(name_votes(session.transcript, is_call_speaker), unnamed, taken).items():
+        session = self._store.get(code)
+        voices = {u.speaker_id for u in session.transcript if is_call_speaker(u.speaker_id)}
+        taken = set(session.participants.values()) | {
+            self._store.speaker_name(code, sid, call_speaker_name(sid)) for sid in voices - set(unnamed)
+        }
+        names = await name_voices(session.transcript, unnamed, taken, self._llm)
+        for speaker_id, name in names.items():
+            if speaker_id not in self._unnamed_voices(code):  # renamed by hand while the model was reading
+                continue
             self._store.rename_speaker(code, speaker_id, name)
             await self._show_rename(code, speaker_id)
             logger.info("Named voice %s of session %s: %s", speaker_id, code, name)
+
+    def _schedule_naming(self, code: str) -> None:
+        """Name voices in the background (a model request must never hold up transcription); one run per call at a
+        time, and one more if lines came in during it."""
+        if self._llm is None or not self._unnamed_voices(code):
+            return
+        running = self._naming.get(code)
+        if running is not None and not running.done():
+            self._naming_again.add(code)
+            return
+
+        async def run() -> None:
+            while True:
+                self._naming_again.discard(code)
+                try:
+                    await self._auto_name(code)
+                except Exception:  # a naming problem must never stop the call
+                    logger.exception("Naming voices failed for session %s", code)
+                if code not in self._naming_again:
+                    return
+
+        self._naming[code] = asyncio.create_task(run())
 
     async def _recheck_call(self, code: str) -> None:
         """After a call with its voices told apart: hear the call audio again as a whole (better labels than live),
@@ -389,6 +449,9 @@ class SocketHandlers:
             only=lambda u: is_call_speaker(u.speaker_id) and u.speaker_id.rsplit("-call", 1)[0] == user_id,
         )
         if changed:
+            running = self._naming.get(code)
+            if running is not None and not running.done():
+                await running  # a live run reads the old lines; name from the rebuilt ones after it
             await self._auto_name(code)
             transcript = [u.to_dict() for u in self._store.get(code).transcript]
             await self._sio.emit("transcript_reset", {"code": code, "transcript": transcript}, room=room_for(code))
@@ -486,7 +549,7 @@ class SocketHandlers:
             if masking:
                 utterance.text = mask_text(utterance.text)
             self._store.add_utterance(code, utterance)
-            if self._nba is not None:
+            if self._hints_on(code):
                 try:
                     await self._nba.on_final(code, utterance)
                 except Exception:  # a hint problem must never stop transcription
@@ -497,10 +560,7 @@ class SocketHandlers:
                 except Exception:  # a ticket problem must never stop transcription
                     logger.exception("Ticket drafting failed for session %s", code)
             if self._settings.call_diarize:
-                try:
-                    await self._auto_name(code)
-                except Exception:  # a naming problem must never stop transcription
-                    logger.exception("Naming voices failed for session %s", code)
+                self._schedule_naming(code)
 
         async def notify(payload: dict) -> None:
             await self._sio.emit("stt_status", payload, room=room_for(code))
@@ -590,6 +650,9 @@ class SocketHandlers:
             if any(c == code for c, _ in self._streams):
                 return  # recording again; analysed when it stops
             await self._recheck_room(code)
+            naming = self._naming.get(code)
+            if naming is not None and not naming.done():
+                await naming  # the summary uses the voices' names
             if not self._settings.call_analysis:
                 return
             await analyse_session(self._store, code, self._llm)

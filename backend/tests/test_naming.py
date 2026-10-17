@@ -1,97 +1,82 @@
-"""Naming the voices in the call audio from what people say."""
-from app.naming import addressed, answered, decide, introduced, name_votes
+"""Naming the voices in the call audio: the model lists the people and picks who each voice is; the code only checks
+the answers against the call."""
+from app.naming import (NAMES_PROMPT, UNKNOWN, VOICE_PROMPT, candidates, name_voices, names_input, neutral_labels,
+                        settle, voice_input)
 from app.sessions import Utterance, is_call_speaker
 
 
-def line(speaker: str, text: str, start: float, end: float | None = None) -> Utterance:
-    name = {"u1": "Aklavya"}.get(speaker, "Computer")
-    return Utterance(f"{speaker}{start}", speaker, name, text, start, end if end is not None else start + 3)
+def line(speaker: str, name: str, text: str, start: float) -> Utterance:
+    return Utterance(f"{speaker}{start}", speaker, name, text, start, start + 3)
 
 
-def test_clues_in_a_line():
-    assert addressed("Priya, can you retest it?") == "Priya"
-    assert addressed("Okay Balram, you own the coupon fix.") == "Balram"
-    assert addressed("Okay, please create a Jira ticket") is None
-    assert addressed("Thursday, we release.") is None
-    assert answered("Will do, Vikram. I'll send the update.") == "Vikram"
-    assert answered("Thanks Sarah.") == "Sarah"
-    assert answered("Thanks everyone.") is None
-    assert introduced("Hi, Priya here.") == "Priya"
-    assert introduced("This is Balram from QA") == "Balram"
+ESCALATION = [
+    line("u1", "Aklavya", "Hi Neha, Rohan and Karan, thanks for joining.", 0),
+    line("u1-call", "Computer", "Thanks Aklavya. Apex can't export the monthly report.", 4),
+    line("u1-call2", "Computer 2", "The export times out, and it fails when the file is ready.", 8),
+    line("u1", "Aklavya", "Rohan, can you move it to a background job by Thursday?", 12),
+    line("u1-call2", "Computer 2", "Yes, I'll move the export to a background job.", 16),
+    line("u1", "Aklavya", "Karan, please send Meera a status update by tomorrow.", 20),
+    line("u1-call", "Computer", "Will do, Aklavya. I'll send it before noon.", 24),
+]
+UNNAMED = {"u1-call": "Computer", "u1-call2": "Computer 2"}
 
 
-def test_the_sprint_call_names_every_voice():
-    lines = [
-        line("u1", "Hi everyone. Balram, Priya, Sara and Vikram are here, so let's start.", 0),
-        line("u1-call", "Thanks Aklavya. The release is on Friday.", 4),
-        line("u1-call2", "The first bug: the coupon code is applied twice.", 8),
-        line("u1", "Balram, you own the coupon fix. Can you have it done by Wednesday?", 12),
-        line("u1-call3", "Yes Aklavya, I'll fix the coupon bug by Wednesday evening.", 16),
-        line("u1", "Sara, please write the pagination design by Tuesday.", 20),
-        line("u1-call4", "Sure, I'll share the pagination design on Tuesday.", 24),
-        line("u1", "Priya, you retest both bugs on Thursday evening.", 28),
-        line("u1-call2", "Got it. I'll retest Thursday evening.", 32),
-        line("u1-call", "Good. Aklavya, please send me a status update on Thursday.", 36),
-        line("u1", "Will do, Vikram. I'll send the update on Thursday.", 40),
-    ]
-    votes = name_votes(lines, is_call_speaker)
-    names = decide(votes, {"u1-call", "u1-call2", "u1-call3", "u1-call4"}, taken={"Aklavya"})
-    assert names == {"u1-call": "Vikram", "u1-call2": "Priya", "u1-call3": "Balram", "u1-call4": "Sara"}
+class FakeLLM:
+    """Answers the name list with `names` and each voice with `picks[label]`."""
+
+    def __init__(self, names=None, picks=None, fail=False):
+        self.names, self.picks, self.fail, self.calls = names or [], picks or {}, fail, []
+
+    async def json(self, system, user, schema):
+        self.calls.append((system, user, schema))
+        if self.fail:
+            raise RuntimeError("model down")
+        if system == NAMES_PROMPT:
+            return {"names": self.names}, "fake"
+        label = user.split("\n", 1)[0].removeprefix("Unknown voice: ")
+        return {"why": "", "name": self.picks.get(label, UNKNOWN)}, "fake"
 
 
-def test_my_own_name_and_names_taken_are_never_given():
-    lines = [
-        line("u1-call", "Aklavya, please send me the update.", 0),
-        line("u1-call2", "Sure.", 4),
-        line("u1", "Priya, can you check?", 8),
-        line("u1-call2", "Yes.", 12),
-    ]
-    names = decide(name_votes(lines, is_call_speaker), {"u1-call2"}, taken={"Aklavya", "Priya"})
-    assert names == {}
+def test_listed_names_are_kept_only_when_written_as_names_in_the_call_and_free():
+    """Seen live: "...when it's ready" became a voice named "Ready" under phrase rules."""
+    answer = {"names": ["Aklavya", "Neha", "Rohan", "ready", "Ready", "Vikram", "Karan", "Karan", "Aquavia"]}
+    assert candidates(answer, ESCALATION, {"Aklavya"}) == ["Neha", "Rohan", "Karan"]
 
 
-def test_a_voice_with_competing_clues_waits_and_a_name_goes_to_one_voice_only():
-    lines = [
-        line("u1", "Priya, can you check?", 0),
-        line("u1-call", "Yes.", 4),
-        line("u1", "Sara, and you?", 8),
-        line("u1-call", "Also yes.", 12),
-        line("u1", "Priya, one more thing?", 16),
-        line("u1-call2", "Sure.", 20),
-    ]
-    votes = name_votes(lines, is_call_speaker)
-    # u1-call has one vote each for Priya and Sara: not sure. u1-call2 has one clear vote for Priya.
-    assert decide(votes, {"u1-call", "u1-call2"}, taken=set()) == {"u1-call2": "Priya"}
+def test_a_name_two_voices_pick_waits_and_unknown_names_nobody():
+    picks = {"a": "Neha", "b": "Neha", "c": "Rohan", "d": UNKNOWN}
+    assert settle(picks) == {"c": "Rohan"}
 
 
-def test_two_votes_win_over_one():
-    lines = [
-        line("u1", "Priya, can you check?", 0),
-        line("u1-call", "Yes.", 4),
-        line("u1", "Priya, and the login page?", 8),
-        line("u1-call", "That too.", 12),
-        line("u1", "Sara, what do you think?", 16),
-        line("u1-call", "Fine by me.", 20),
-    ]
-    assert decide(name_votes(lines, is_call_speaker), {"u1-call"}, taken=set()) == {"u1-call": "Priya"}
+def test_the_model_reads_unknown_voices_as_neutral_speakers():
+    labels = neutral_labels(ESCALATION, is_call_speaker)
+    assert labels == {"u1-call": "Speaker A", "u1-call2": "Speaker B"}
+    text = names_input(ESCALATION, labels)
+    assert "Speaker A: Thanks Aklavya.\nSpeaker A: Apex can't export the monthly report." in text
+    assert "Computer" not in text
+    asked = voice_input(ESCALATION, "u1-call2", ["Neha", "Rohan", "Karan"], labels)
+    assert asked.startswith("Unknown voice: Speaker B\nPeople: Neha, Rohan, Karan\n\n")
+    assert "Aklavya: Rohan, can you move it to a background job by Thursday?\nSpeaker B: Yes, I'll move" in asked
+    assert asked.endswith("Which of the people is Speaker B?")
 
 
-def test_late_or_unrelated_lines_give_no_vote():
-    lines = [
-        line("u1", "Priya, can you check?", 0, 2),
-        line("u1-call", "Hello?", 30),  # 28 s later: not an answer
-        line("u1-call2", "Hi, Balram here.", 40),
-    ]
-    votes = name_votes(lines, is_call_speaker)
-    assert "u1-call" not in votes
-    assert decide(votes, {"u1-call", "u1-call2"}, taken=set()) == {"u1-call2": "Balram"}
+async def test_voices_get_the_names_the_model_picks_from_the_list():
+    llm = FakeLLM(names=["Aklavya", "Neha", "Rohan", "Karan"], picks={"Speaker A": "Karan", "Speaker B": "Rohan"})
+    assert await name_voices(ESCALATION, UNNAMED, {"Aklavya"}, llm) == {"u1-call": "Karan", "u1-call2": "Rohan"}
+    voice_calls = [c for c in llm.calls if c[0] == VOICE_PROMPT]
+    assert len(voice_calls) == 2
+    assert voice_calls[0][2]["properties"]["name"]["enum"] == ["Neha", "Rohan", "Karan", UNKNOWN]
 
 
-def test_a_misheard_spelling_of_a_taken_name_is_not_given():
-    from app.naming import clashes
+async def test_no_names_in_the_call_or_a_failing_model_names_nobody():
+    llm = FakeLLM(names=[])
+    assert await name_voices(ESCALATION, UNNAMED, set(), llm) == {} and len(llm.calls) == 1
+    assert await name_voices(ESCALATION, UNNAMED, set(), FakeLLM(fail=True)) == {}
+    idle = FakeLLM()
+    assert await name_voices(ESCALATION, {}, set(), idle) == {} and idle.calls == []
 
-    assert clashes("Aquavia", {"Aklavya"}) and clashes("Aklavaya", {"Aklavya"}) and clashes("Sara", {"Sarah"})
-    assert not clashes("Vikram", {"Aklavya", "Balram"}) and not clashes("Priya", {"Aklavya"})
-    lines = [line("u1-call", "Hi.", 0), line("u1-call2", "Good. Aquavia, please send me the update.", 4)]
-    # "Good. Aquavia" answers u1-call by its pattern, but Aquavia is how Aklavya was heard.
-    assert decide(name_votes(lines, is_call_speaker), {"u1-call"}, taken={"Aklavya"}) == {}
+
+def test_the_input_keeps_the_latest_lines_of_a_long_call():
+    lines = [line("u1", "Aklavya", f"Line {i}.", i) for i in range(300)]
+    text = names_input(lines)
+    assert "Aklavya: Line 299." in text and "Aklavya: Line 99." not in text

@@ -63,6 +63,7 @@ class Settings:
     gemini_model: str = "gemini-2.5-flash-lite"
     # Live next-best-action hints (app.nba): local Ollama only, never a cloud model.
     nba_enabled: bool = False  # from_env turns it on
+    nba_default_on: bool = True  # hints on when a call starts; each call can turn them off (set_hints)
     nba_model: str = "qwen2.5:7b"  # set from the CPU benchmark (tools/bench_nba.py)
     # Same context as llm_num_ctx by default: one model loaded at two sizes makes Ollama reload it on every switch, and
     # Ollama 0.40.4 was seen hanging a 16384-token summary request forever while the 4096-token hint model was loaded.
@@ -157,6 +158,7 @@ class Settings:
             llm_cpu_only=_bool(env("LLM_CPU_ONLY", "true")),
             gemini_model=env("GEMINI_MODEL", cls.gemini_model),
             nba_enabled=_bool(env("NBA_ENABLED", "true")),
+            nba_default_on=_bool(env("NBA_DEFAULT_ON", "true")),
             nba_model=env("NBA_MODEL", cls.nba_model),
             nba_num_ctx=int(env("NBA_NUM_CTX") or env("LLM_NUM_CTX") or cls.nba_num_ctx),
             nba_context_lines=int(env("NBA_CONTEXT_LINES", cls.nba_context_lines)),

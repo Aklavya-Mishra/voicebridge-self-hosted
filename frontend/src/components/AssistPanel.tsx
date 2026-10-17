@@ -4,8 +4,11 @@ import type { NbaHint, NbaStatusEvent, TicketDraft } from '../lib/types'
 import { TicketCard } from './TicketCard'
 
 interface Props {
-  /** Live hints are on (the hint and customer info sections). */
-  hintsEnabled: boolean
+  /** Live hints can run in this call (server has them, not in-room): the Hints switch is shown. */
+  hintsAvailable: boolean
+  /** Live hints are on for this call (the call type, hint and customer info sections). */
+  hintsOn: boolean
+  onToggleHints: () => void
   /** Call type detected from the caller's latest line; null until they first speak. */
   detected: string | null
   hints: NbaHint[]
@@ -21,7 +24,9 @@ interface Props {
 
 /** Jira tickets asked for on the call, live hints for the advisor (newest first) and what the customer has told. */
 export function AssistPanel({
-  hintsEnabled,
+  hintsAvailable,
+  hintsOn,
+  onToggleHints,
   detected,
   hints,
   facts,
@@ -33,11 +38,20 @@ export function AssistPanel({
   onDismissTicket,
 }: Props) {
   const shownTickets = visibleTickets(tickets)
+  const hintsEnabled = hintsAvailable && hintsOn
   return (
     <aside className="assist card" aria-label="Call assist">
       <div className="assist-head">
         <h2>Assist</h2>
+        {hintsAvailable && (
+          <button className="hints-toggle" aria-pressed={hintsOn} onClick={onToggleHints}>
+            Hints: {hintsOn ? 'On' : 'Off'}
+          </button>
+        )}
       </div>
+      {hintsAvailable && !hintsOn && (
+        <p className="muted small">Hints are off for this call. Jira, the summary and the Slack recap still work.</p>
+      )}
       {hintsEnabled && <p className="muted small">{domainText(detected)}</p>}
       {hintsEnabled && status === 'thinking' && <p className="muted small">Thinking…</p>}
       {hintsEnabled && status === 'unavailable' && (

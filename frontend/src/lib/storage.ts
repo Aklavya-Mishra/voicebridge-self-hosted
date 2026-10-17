@@ -52,6 +52,26 @@ export function saveAuth(auth: StoredAuth | null): void {
   }
 }
 
+const HINTS_KEY = 'voicebridge.hints'
+
+/** Whether this browser last wanted live hints on (true), off (false), or never chose (null: the server default). */
+export function loadHintsPref(): boolean | null {
+  try {
+    const raw = localStorage.getItem(HINTS_KEY)
+    return raw === null ? null : raw === 'on'
+  } catch {
+    return null
+  }
+}
+
+export function saveHintsPref(on: boolean): void {
+  try {
+    localStorage.setItem(HINTS_KEY, on ? 'on' : 'off')
+  } catch {
+    // ignore
+  }
+}
+
 const CONSENT_KEY = 'voicebridge.consented'
 
 /** Whether the recording notice was already agreed to for this call: it is shown once per call. */

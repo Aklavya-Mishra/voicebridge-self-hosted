@@ -123,3 +123,67 @@ async def test_a_failing_hint_service_does_not_stop_transcription(nba_server, mo
         saved = (await c.get(f"/api/sessions/{code}", headers=h)).json()["session"]
     assert [u["text"] for u in saved["transcript"]] == ["I want to cancel my plan"]
     await client.disconnect()
+
+
+async def test_hints_can_be_turned_off_for_a_call(nba_server):
+    """Hints off: no hint requests (they are 87% of model tokens), everything else unchanged; back on, they return."""
+    base, llm = nba_server
+    client, code, _, events = await start_call(base)
+    changed: list[dict] = []
+    client.on("hints_changed", changed.append)
+    assert (await client.call("set_hints", {"code": code, "enabled": False})) == {"ok": True}
+    assert await wait_for(lambda: changed == [{"code": code, "enabled": False}])
+    for chunk in chunks(stereo(silence(2.0), tone(1.0) + silence(1.0)), chunk_s=0.05):
+        await client.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+    await client.emit("stop_audio", {"code": code})
+    assert await wait_for(lambda: any(n == "transcript" and d["final"] and d["text"] for n, d in events))
+    await asyncio.sleep(0.3)
+    assert [n for n, _ in events if n.startswith("nba_")] == [] and llm.calls == []
+    rejoined = await client.call("join_session", {"code": code})
+    assert rejoined["hints_enabled"] is False  # a reconnect keeps the choice
+
+    assert (await client.call("set_hints", {"code": code, "enabled": True})) == {"ok": True}
+    for chunk in chunks(stereo(silence(2.0), tone(1.0) + silence(1.0)), chunk_s=0.05):
+        await client.emit("audio_chunk", {"code": code, "audio": chunk, "channels": 2})
+    await client.emit("stop_audio", {"code": code})
+    assert await wait_for(lambda: "tel-cancel" in hint_ids(events))
+    await client.disconnect()
+
+
+async def test_set_hints_needs_the_call_joined(nba_server):
+    base, _ = nba_server
+    token, _ = await login(base, "Someone")
+    client = socketio.AsyncClient()
+    await client.connect(base, auth={"token": token}, transports=["websocket"])
+    ack = await client.call("set_hints", {"code": "ABCDEF", "enabled": False})
+    assert ack["ok"] is False
+    await client.disconnect()
+
+
+async def test_server_default_can_start_calls_with_hints_off(settings):
+    llm = WarmLLM(answer())
+    port = free_port()
+    app = create_app(replace(settings, nba_enabled=True, nba_default_on=False), stt=RecordingSTT(text="I want to cancel"),
+                     nba_llm=llm)
+    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    task = asyncio.create_task(srv.serve())
+    while not srv.started:
+        await asyncio.sleep(0.05)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        token, _ = await login(base, "Aklavya")
+        h = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(base_url=base) as c:
+            code = (await c.post("/api/sessions", headers=h)).json()["session"]["code"]
+        client = socketio.AsyncClient()
+        await client.connect(base, auth={"token": token}, transports=["websocket"])
+        await asyncio.sleep(0.2)
+        at_start = llm.warmed  # the server warms the model once when it starts
+        ack = await client.call("join_session", {"code": code})
+        assert ack["ok"] and ack["hints_enabled"] is False
+        await asyncio.sleep(0.2)
+        assert llm.warmed == at_start  # joining a call without hints warms nothing
+        await client.disconnect()
+    finally:
+        srv.should_exit = True
+        await task

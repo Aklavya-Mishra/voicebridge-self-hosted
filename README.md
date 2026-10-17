@@ -151,7 +151,12 @@ Hints and Customer info are saved with the call and shown again under its summar
   of such a warm-up starting (`NBA_TIMEOUT_S`, 60 s, covers it). Rule hints are instant. `python tools/bench_nba.py
   <model>` (in `backend/`) times a model on two sample calls.
 - When Ollama is not running (or the model is not pulled), the panel says so and rule hints keep working.
-  `NBA_ENABLED=false` turns live hints off.
+  `NBA_ENABLED=false` turns live hints off on the server.
+- **Hints: On/Off** in the Assist panel turns hints off for one call (for everyone in it); the browser remembers
+  the choice for the next call, and `NBA_DEFAULT_ON` sets where a new call starts. Off, no hint requests run and
+  the call type and Customer info go too (they come from the same request); live text, Jira tickets, the summary,
+  next steps and the Slack recap are unchanged. Hints are ~87% of the model's tokens on a test call, so calls
+  without them need far less GPU.
 
 ### Jira tickets
 

@@ -199,7 +199,7 @@ def test_call_voices_are_computer_then_computer_n_and_can_be_renamed_before_a_sa
     assert store.speaker_name(code, "u1-call2", "?") == "Balram"
 
 
-def _handlers(settings=None):
+def _handlers(settings=None, llm=None):
     from app.config import Settings
     from app.socket_events import SocketHandlers
 
@@ -216,7 +216,7 @@ def _handlers(settings=None):
     store = SessionStore()
     code = store.create({"id": "u1", "name": "Aklavya"}).code
     sio = Sio()
-    return SocketHandlers(sio, store, settings or Settings(jwt_secret="t"), stt=None, llm=None), store, code, sio
+    return SocketHandlers(sio, store, settings or Settings(jwt_secret="t"), stt=None, llm=llm), store, code, sio
 
 
 def test_call_audio_tells_voices_apart_unless_turned_off():
@@ -243,20 +243,45 @@ def say(store, code, speaker, name, text, start):
 
 
 async def test_voices_are_named_live_and_a_name_typed_by_hand_is_kept():
-    handlers, store, code, sio = _handlers()
+    from tests.test_naming import FakeLLM
+
+    llm = FakeLLM(names=["Priya", "Vikram"], picks={"Speaker A": "Priya"})
+    handlers, store, code, sio = _handlers(llm=llm)
     say(store, code, "u1", "Aklavya", "Priya, can you retest the login page?", 0)
     say(store, code, "u1-call2", "Computer 2", "Sure, I'll retest it today.", 4)
     await handlers._auto_name(code)
     assert store.speaker_name(code, "u1-call2", "?") == "Priya"
     assert [u.speaker_name for u in store.get(code).transcript] == ["Aklavya", "Priya"]
     assert ("speaker_renamed", {"code": code, "speaker_id": "u1-call2", "name": "Priya"}) in sio.emitted
-    # A voice renamed by hand is never named again by the clues.
+    # A voice renamed by hand is never named again, and named voices are not asked about.
     say(store, code, "u1-call", "Computer", "And the payments bug?", 8)
     store.rename_speaker(code, "u1-call", "Rohan")
     handlers._named_by_hand.setdefault(code, set()).add("u1-call")
     say(store, code, "u1", "Aklavya", "Thanks Vikram.", 12)
+    llm.picks = {"Speaker A": "Vikram"}
+    calls = len(llm.calls)
     await handlers._auto_name(code)
-    assert store.speaker_name(code, "u1-call", "?") == "Rohan"
+    assert store.speaker_name(code, "u1-call", "?") == "Rohan" and len(llm.calls) == calls
+
+
+async def test_naming_runs_in_the_background_one_run_at_a_time():
+    import asyncio
+
+    from tests.test_naming import FakeLLM
+
+    class SlowLLM(FakeLLM):
+        async def json(self, system, user, schema):
+            await asyncio.sleep(0.05)
+            return await super().json(system, user, schema)
+
+    llm = SlowLLM(names=["Priya"], picks={"Speaker A": "Priya"})
+    handlers, store, code, _ = _handlers(llm=llm)
+    say(store, code, "u1", "Aklavya", "Priya, can you retest the login page?", 0)
+    say(store, code, "u1-call2", "Computer 2", "Sure.", 4)
+    for _ in range(5):  # five lines while a run is going: one run now, one more after it
+        handlers._schedule_naming(code)
+    await handlers._naming[code]
+    assert store.speaker_name(code, "u1-call2", "?") == "Priya" and len(llm.calls) == 2  # list + pick; then all named
 
 
 def test_only_the_call_audio_lines_are_swapped():

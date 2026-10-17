@@ -574,6 +574,15 @@ main.wide {
 .assist-head h2 {
   margin: 0;
 }
+.hints-toggle {
+  padding: 0.25rem 0.7rem;
+  font-size: 0.85rem;
+}
+.hints-toggle[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
 .assist-head select {
   width: auto;
   margin: 0;
